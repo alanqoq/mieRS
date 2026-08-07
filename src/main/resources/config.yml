@@ -1,0 +1,11 @@
+# 禁用 /miers IQ 图片查询的群 ID 列表；不影响 /miers help 和 /miers st。
+blockedGroups: []
+
+# 最大已接收 IQ 请求数，包含正在处理和等待中的任务，必须大于 0。
+maxQueue: 10
+
+# 队列已满时发送的提示；设置为空字符串时不发送任何提示。
+queueFullMessage: ""
+
+# 同一用户两次成功进入 IQ 请求队列的间隔分钟数；设置为 0 时不限制。
+cooldownMinutes: 0

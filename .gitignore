@@ -1,0 +1,11 @@
+.gradle/
+build/
+graphify-out/
+output/
+codexradar-iq-seven-by-three.png
+
+.idea/
+*.iml
+
+# Local SDK paths and machine-specific Gradle state
+local.properties
