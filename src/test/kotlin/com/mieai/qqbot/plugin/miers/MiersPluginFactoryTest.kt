@@ -58,6 +58,102 @@ class MiersPluginFactoryTest {
     }
 
     @Test
+    fun `configured aliases trigger every command and preserve canonical behavior`() {
+        val configuration = defaultConfiguration().copy(
+            commandAliases = MiersCommandAliases(
+                query = "模型IQ",
+                help = "查询miers指令",
+                toggle = "切换miers状态",
+            ),
+        )
+        withPlugin(configuration) { fixture, _, _ ->
+            fixture.events.emit(event(fixture, "/查询miers指令")).toCompletableFuture().join()
+            val aliasHelp = fixture.messages.textMessages().single().content
+            assertTrue(aliasHelp.contains("/miers（别名：/模型IQ）"))
+            assertTrue(aliasHelp.contains("/miers help（别名：/查询miers指令）"))
+            assertTrue(aliasHelp.contains("/miers st（别名：/切换miers状态）"))
+
+            fixture.events.emit(event(fixture, "/模型IQ")).toCompletableFuture().join()
+            awaitCondition { fixture.media.uploads().size == 1 }
+
+            fixture.events.emit(event(fixture, "/miers")).toCompletableFuture().join()
+            awaitCondition { fixture.media.uploads().size == 2 }
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/切换miers状态",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-alias",
+                    role = GroupMemberRole.MEMBER,
+                ),
+            ).toCompletableFuture().join()
+            assertTrue(fixture.messages.textMessages().last().content.contains("管理员或群主"))
+            assertFalse(readConfiguration(fixture).isGroupBlocked("group-alias"))
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/切换miers状态",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-alias",
+                    role = GroupMemberRole.ADMIN,
+                ),
+            ).toCompletableFuture().join()
+            val blockedConfiguration = readConfiguration(fixture)
+            assertTrue(blockedConfiguration.isGroupBlocked("group-alias"))
+            assertEquals(configuration.commandAliases, blockedConfiguration.commandAliases)
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/模型IQ",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-alias",
+                    role = GroupMemberRole.MEMBER,
+                ),
+            ).toCompletableFuture().join()
+            assertEquals(2, fixture.media.uploads().size)
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/miers help",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-alias",
+                    role = GroupMemberRole.MEMBER,
+                ),
+            ).toCompletableFuture().join()
+            assertTrue(fixture.messages.textMessages().last().content.contains("/查询miers指令"))
+
+            fixture.events.emit(event(fixture, "/查询miers指令 extra")).toCompletableFuture().join()
+            assertTrue(fixture.messages.textMessages().last().content.contains("未知 MieRS 指令"))
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/切换miers状态",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-alias",
+                    role = GroupMemberRole.OWNER,
+                ),
+            ).toCompletableFuture().join()
+            assertFalse(readConfiguration(fixture).isGroupBlocked("group-alias"))
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/模型IQ",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-alias",
+                    role = GroupMemberRole.MEMBER,
+                ),
+            ).toCompletableFuture().join()
+            awaitCondition { fixture.media.uploads().size == 3 }
+        }
+    }
+
+    @Test
     fun `query stages a png and enqueues it as a passive reply`() {
         withPlugin(defaultConfiguration()) { fixture, _, _ ->
             val source = event(fixture, "/miers")

@@ -81,9 +81,10 @@ private class MiersPlugin(
     private fun handleMessage(event: PluginEvent): CompletionStage<Void> {
         if (stopped) return completed()
         val inbound = event.message ?: return completed()
-        return when (parseCommand(inbound.content)) {
+        val commandAliases = configurationStore.snapshot().commandAliases
+        return when (parseCommand(inbound.content, commandAliases)) {
             MiersCommand.QUERY -> handleIqQuery(event, inbound)
-            MiersCommand.HELP -> reply(event, HELP_TEXT)
+            MiersCommand.HELP -> reply(event, helpText(commandAliases))
             MiersCommand.TOGGLE -> handleGroupToggle(event, inbound)
             MiersCommand.UNKNOWN -> reply(event, UNKNOWN_COMMAND_TEXT)
             null -> completed()
@@ -195,9 +196,24 @@ private class MiersPlugin(
 
     private fun completed(): CompletionStage<Void> = CompletableFuture.completedFuture(null)
 
-    private fun parseCommand(content: String?): MiersCommand? {
+    private fun parseCommand(content: String?, aliases: MiersCommandAliases): MiersCommand? {
         val tokens = content?.trim()?.split(COMMAND_WHITESPACE)?.filter(String::isNotEmpty).orEmpty()
-        if (tokens.isEmpty() || !tokens.first().equals(ROOT_COMMAND, ignoreCase = true)) return null
+        if (tokens.isEmpty()) return null
+
+        val aliasCommand = tokens.first()
+            .takeIf { it.startsWith('/') && it.length > 1 }
+            ?.substring(1)
+            ?.let { alias ->
+                when {
+                    aliases.query.isNotEmpty() && alias.equals(aliases.query, ignoreCase = true) -> MiersCommand.QUERY
+                    aliases.help.isNotEmpty() && alias.equals(aliases.help, ignoreCase = true) -> MiersCommand.HELP
+                    aliases.toggle.isNotEmpty() && alias.equals(aliases.toggle, ignoreCase = true) -> MiersCommand.TOGGLE
+                    else -> null
+                }
+            }
+        if (aliasCommand != null) return if (tokens.size == 1) aliasCommand else MiersCommand.UNKNOWN
+
+        if (!tokens.first().equals(ROOT_COMMAND, ignoreCase = true)) return null
         return when {
             tokens.size == 1 -> MiersCommand.QUERY
             tokens.size == 2 && tokens[1].lowercase(Locale.ROOT) == "help" -> MiersCommand.HELP
@@ -205,6 +221,18 @@ private class MiersPlugin(
             else -> MiersCommand.UNKNOWN
         }
     }
+
+    private fun helpText(aliases: MiersCommandAliases): String = buildString {
+        append(commandLabel("/miers", aliases.query))
+        appendLine(" - 实时抓取并发送 21 个模型档位的 IQ 图片")
+        append(commandLabel("/miers help", aliases.help))
+        appendLine(" - 查看本插件全部指令及作用")
+        append(commandLabel("/miers st", aliases.toggle))
+        append(" - 群管理员或群主切换本群是否禁用 /miers 查询")
+    }
+
+    private fun commandLabel(command: String, alias: String): String =
+        if (alias.isEmpty()) command else "$command（别名：/$alias）"
 
     private fun cooldownMessage(remaining: Duration): String {
         val roundedMinutes = max(1L, (remaining.seconds + 59L) / 60L)
@@ -223,9 +251,6 @@ private class MiersPlugin(
         const val ROOT_COMMAND = "/miers"
         const val IMAGE_FILE_NAME = "miers-iq.png"
         const val IMAGE_CONTENT_TYPE = "image/png"
-        const val HELP_TEXT = """/miers - 实时抓取并发送 21 个模型档位的 IQ 图片
-/miers help - 查看本插件全部指令及作用
-/miers st - 群管理员或群主切换本群是否禁用 /miers 查询"""
         const val IQ_QUERY_FAILURE_TEXT = "CodexRadar IQ 数据抓取失败，请稍后重试。"
         const val UNKNOWN_COMMAND_TEXT = "未知 MieRS 指令，请使用 /miers help 查看可用指令。"
         const val GROUP_ONLY_TEXT = "/miers st 仅可在群聊中使用。"

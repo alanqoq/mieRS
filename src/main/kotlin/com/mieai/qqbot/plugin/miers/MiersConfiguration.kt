@@ -25,6 +25,7 @@ data class MiersConfiguration(
     val maxQueue: Int = DEFAULT_MAX_QUEUE,
     val queueFullMessage: String = "",
     val cooldownMinutes: Int = DEFAULT_COOLDOWN_MINUTES,
+    val commandAliases: MiersCommandAliases = MiersCommandAliases(),
 ) {
     init {
         validateGroupIds(blockedGroups)
@@ -65,7 +66,36 @@ data class MiersConfiguration(
     }
 }
 
-/** Strict YAML codec for the four-field MieRS configuration document. */
+/** Optional standalone command names that supplement the canonical MieRS commands. */
+data class MiersCommandAliases(
+    val query: String = "",
+    val help: String = "",
+    val toggle: String = "",
+) {
+    init {
+        val aliases = listOf(
+            "query" to query,
+            "help" to help,
+            "toggle" to toggle,
+        )
+        val configuredAliases = ArrayList<String>()
+        aliases.forEach { (name, alias) ->
+            validateCommandAlias("commandAliases.$name", alias)
+            if (alias.isNotEmpty()) {
+                requireConfiguration(!alias.equals(CANONICAL_ROOT_COMMAND, ignoreCase = true), "commandAliases.$name", "must not use the reserved command name miers")
+                requireConfiguration(configuredAliases.none { existing -> alias.equals(existing, ignoreCase = true) }, "commandAliases.$name", "duplicates another command alias")
+                configuredAliases.add(alias)
+            }
+        }
+    }
+
+    companion object {
+        const val MAX_CODE_POINTS: Int = 64
+        private const val CANONICAL_ROOT_COMMAND = "miers"
+    }
+}
+
+/** Strict YAML codec for the MieRS configuration document. */
 object MiersConfigurationCodec {
     private fun newYaml(): Yaml = Yaml(
         SafeConstructor(
@@ -77,7 +107,9 @@ object MiersConfigurationCodec {
         ),
     )
 
-    private val expectedKeys = setOf("blockedGroups", "maxQueue", "queueFullMessage", "cooldownMinutes")
+    private val requiredKeys = setOf("blockedGroups", "maxQueue", "queueFullMessage", "cooldownMinutes")
+    private val expectedKeys = requiredKeys + "commandAliases"
+    private val expectedAliasKeys = setOf("query", "help", "toggle")
 
     @JvmStatic
     fun parse(content: String): MiersConfiguration {
@@ -104,7 +136,7 @@ object MiersConfigurationCodec {
         if (unknown.isNotEmpty()) {
             throw MiersConfigurationException("unknown configuration field(s): ${unknown.sorted().joinToString(", ")}")
         }
-        val missing = expectedKeys - stringKeys.toSet()
+        val missing = requiredKeys - stringKeys.toSet()
         if (missing.isNotEmpty()) {
             throw MiersConfigurationException("missing configuration field(s): ${missing.sorted().joinToString(", ")}")
         }
@@ -133,12 +165,19 @@ object MiersConfigurationCodec {
             ?: throw MiersConfigurationException("cooldownMinutes must be an integer")
         requireConfiguration(cooldownMinutes >= 0, "cooldownMinutes", "must be a non-negative integer")
 
+        val commandAliases = if (values.containsKey("commandAliases")) {
+            parseCommandAliases(values["commandAliases"])
+        } else {
+            MiersCommandAliases()
+        }
+
         return try {
             MiersConfiguration(
                 blockedGroups = immutableSortedSet(parsedGroups),
                 maxQueue = maxQueue,
                 queueFullMessage = queueFullMessage,
                 cooldownMinutes = cooldownMinutes,
+                commandAliases = commandAliases,
             )
         } catch (error: MiersConfigurationException) {
             throw error
@@ -151,6 +190,20 @@ object MiersConfigurationCodec {
     fun render(configuration: MiersConfiguration): String {
         val value = configuration.immutableCopy()
         return buildString {
+            appendLine("# 指令别名配置。插件原有的三条指令始终保留，别名只是额外入口。")
+            appendLine("# 别名填写时不要带开头的 /，只能填写不含空白和 / 的单个名称；空字符串表示不启用别名。")
+            appendLine("# 三个非空别名不能重复，也不能使用保留名称 miers。")
+            appendLine("commandAliases:")
+            appendLine("  # /miers：实时抓取 CodexRadar 数据，生成并发送模型 IQ 图片。")
+            appendLine("  # 例如设置为 \"模型IQ\" 后，可使用 /模型IQ 触发查询。")
+            appendLine("  query: ${yamlString(value.commandAliases.query)}")
+            appendLine("  # /miers help：显示本插件全部指令及作用。")
+            appendLine("  # 例如设置为 \"查询miers指令\" 后，可使用 /查询miers指令 查看帮助。")
+            appendLine("  help: ${yamlString(value.commandAliases.help)}")
+            appendLine("  # /miers st：仅供群管理员或群主切换本群是否禁用 IQ 查询。")
+            appendLine("  # 例如设置为 \"切换miers状态\" 后，可使用 /切换miers状态 执行切换。")
+            appendLine("  toggle: ${yamlString(value.commandAliases.toggle)}")
+            appendLine()
             appendLine("# 禁用 /miers IQ 图片查询的群 ID 列表；不影响 /miers help 和 /miers st。")
             if (value.blockedGroups.isEmpty()) {
                 appendLine("blockedGroups: []")
@@ -168,6 +221,31 @@ object MiersConfigurationCodec {
             appendLine("# 同一用户两次成功进入 IQ 请求队列的间隔分钟数；设置为 0 时不限制。")
             appendLine("cooldownMinutes: ${value.cooldownMinutes}")
         }
+    }
+
+    private fun parseCommandAliases(value: Any?): MiersCommandAliases {
+        val aliases = value as? Map<*, *>
+            ?: throw MiersConfigurationException("commandAliases must be a YAML mapping")
+        val stringKeys = aliases.keys.map { key ->
+            key as? String ?: throw MiersConfigurationException("commandAliases keys must be strings")
+        }
+        val unknown = stringKeys.toSet() - expectedAliasKeys
+        if (unknown.isNotEmpty()) {
+            throw MiersConfigurationException("unknown commandAliases field(s): ${unknown.sorted().joinToString(", ")}")
+        }
+        val missing = expectedAliasKeys - stringKeys.toSet()
+        if (missing.isNotEmpty()) {
+            throw MiersConfigurationException("missing commandAliases field(s): ${missing.sorted().joinToString(", ")}")
+        }
+
+        fun stringValue(name: String): String = aliases[name] as? String
+            ?: throw MiersConfigurationException("commandAliases.$name must be a string")
+
+        return MiersCommandAliases(
+            query = stringValue("query"),
+            help = stringValue("help"),
+            toggle = stringValue("toggle"),
+        )
     }
 }
 
@@ -287,6 +365,17 @@ private fun validateGroupId(field: String, value: String) {
     requireConfiguration(value == value.trim(), field, "must not have leading or trailing whitespace")
     requireConfiguration(value.codePointCount(0, value.length) <= 255, field, "must not exceed 255 Unicode code points")
     requireConfiguration(value.codePoints().noneMatch(Character::isWhitespace), field, "must not contain whitespace")
+    requireConfiguration(value.codePoints().noneMatch(Character::isISOControl), field, "must not contain control characters")
+    requireConfiguration(!hasUnpairedSurrogate(value), field, "contains an invalid Unicode character")
+}
+
+private fun validateCommandAlias(field: String, value: String) {
+    if (value.isEmpty()) return
+    requireConfiguration(value.isNotBlank(), field, "must not be blank")
+    requireConfiguration(value == value.trim(), field, "must not have leading or trailing whitespace")
+    requireConfiguration(value.codePointCount(0, value.length) <= MiersCommandAliases.MAX_CODE_POINTS, field, "must not exceed ${MiersCommandAliases.MAX_CODE_POINTS} Unicode code points")
+    requireConfiguration(value.codePoints().noneMatch(Character::isWhitespace), field, "must not contain whitespace")
+    requireConfiguration('/' !in value, field, "must not contain /")
     requireConfiguration(value.codePoints().noneMatch(Character::isISOControl), field, "must not contain control characters")
     requireConfiguration(!hasUnpairedSurrogate(value), field, "contains an invalid Unicode character")
 }

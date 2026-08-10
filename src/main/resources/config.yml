@@ -1,3 +1,17 @@
+# 指令别名配置。插件原有的三条指令始终保留，别名只是额外入口。
+# 别名填写时不要带开头的 /，只能填写不含空白和 / 的单个名称；空字符串表示不启用别名。
+# 三个非空别名不能重复，也不能使用保留名称 miers。
+commandAliases:
+  # /miers：实时抓取 CodexRadar 数据，生成并发送模型 IQ 图片。
+  # 例如设置为 "模型IQ" 后，可使用 /模型IQ 触发查询。
+  query: ""
+  # /miers help：显示本插件全部指令及作用。
+  # 例如设置为 "查询miers指令" 后，可使用 /查询miers指令 查看帮助。
+  help: ""
+  # /miers st：仅供群管理员或群主切换本群是否禁用 IQ 查询。
+  # 例如设置为 "切换miers状态" 后，可使用 /切换miers状态 执行切换。
+  toggle: ""
+
 # 禁用 /miers IQ 图片查询的群 ID 列表；不影响 /miers help 和 /miers st。
 blockedGroups: []
 

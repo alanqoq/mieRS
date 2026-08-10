@@ -2,6 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "commandAliases": {
+      "type": "object",
+      "description": "三条 MieRS 指令的可选独立别名；值不包含开头的 /，空字符串表示不启用。原指令始终保留。",
+      "properties": {
+        "query": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[^/\\s\\p{Cntrl}]*$",
+          "description": "/miers 的别名，用于实时抓取并发送模型 IQ 图片。"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[^/\\s\\p{Cntrl}]*$",
+          "description": "/miers help 的别名，用于显示插件全部指令及作用。"
+        },
+        "toggle": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[^/\\s\\p{Cntrl}]*$",
+          "description": "/miers st 的别名，仅供群管理员或群主切换本群 IQ 查询状态。"
+        }
+      },
+      "required": [
+        "query",
+        "help",
+        "toggle"
+      ],
+      "additionalProperties": false,
+      "default": {
+        "query": "",
+        "help": "",
+        "toggle": ""
+      }
+    },
     "blockedGroups": {
       "type": "array",
       "items": {
