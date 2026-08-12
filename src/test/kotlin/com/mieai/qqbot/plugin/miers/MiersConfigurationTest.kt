@@ -42,7 +42,7 @@ class MiersConfigurationTest {
 
     @Test
     fun `defaults and legacy yaml use no command aliases`() {
-        assertEquals(MiersCommandAliases(), MiersConfiguration.defaults().commandAliases)
+        assertEquals(MiersCommandAliases(), MiersConfiguration().commandAliases)
 
         val legacy = MiersConfigurationCodec.parse(
             """
@@ -95,7 +95,7 @@ class MiersConfigurationTest {
 
     @Test
     fun `parser rejects unknown missing duplicate and incorrectly typed fields`() {
-        val valid = MiersConfigurationCodec.render(MiersConfiguration.defaults())
+        val valid = MiersConfigurationCodec.render(MiersConfiguration())
         val invalidDocuments = listOf(
             valid.replace("maxQueue: 10", "maxQueue: 10\nunknown: true"),
             valid.replace("cooldownMinutes: 0\n", ""),
@@ -123,7 +123,7 @@ class MiersConfigurationTest {
             ),
         )
         Files.writeString(configurationFile, MiersConfigurationCodec.render(initial))
-        val store = MiersConfigurationStore.load(configurationFile)
+        val store = MiersConfigurationStore.open(configurationFile, Files.readString(configurationFile))
 
         assertTrue(store.toggleGroup("group-123"))
         assertTrue(store.isGroupBlocked("group-123"))
@@ -152,7 +152,7 @@ class MiersConfigurationTest {
     fun `failed persistence leaves in memory snapshot unchanged`(@TempDir directory: Path) {
         val configurationFile = directory.resolve("config.yml")
         Files.createDirectory(configurationFile)
-        val initial = MiersConfiguration.defaults()
+        val initial = MiersConfiguration()
         val store = MiersConfigurationStore.open(configurationFile, MiersConfigurationCodec.render(initial))
 
         assertFailsWith<IOException> {

@@ -105,19 +105,6 @@ commandAliases:
 配置后，`/模型IQ` 等价于 `/miers`，`/查询miers指令` 等价于
 `/miers help`，`/切换miers状态` 等价于 `/miers st`。
 
-## 图片预览脚本
-
-项目根目录保留了可重复使用的 `render-codexradar-iq.ps1`：
-
-```powershell
-.\render-codexradar-iq.ps1
-.\render-codexradar-iq.ps1 .\output\miers-iq.png
-```
-
-不传参数时输出 `codexradar-iq-seven-by-three.png`。插件部署后不依赖
-PowerShell，而是使用 Java 21 的 `BufferedImage` 在进程内生成图片。预览脚本本身
-也会实时请求上述 CodexRadar 接口，因此运行时需要可访问该网站。
-
 ## 制品
 
 可部署 JAR 输出到：

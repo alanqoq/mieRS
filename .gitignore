@@ -1,7 +1,14 @@
 .gradle/
 build/
-output/
-codexradar-iq-seven-by-three.png
+
+# Keep the current consumable Graphify outputs, not its caches or dated backups.
+graphify-out/*
+!graphify-out/graph.json
+!graphify-out/graph.html
+!graphify-out/GRAPH_REPORT.md
+!graphify-out/.graphify_labels.json
+!graphify-out/.graphify_labels.json.sig
+!graphify-out/manifest.json
 
 .idea/
 *.iml

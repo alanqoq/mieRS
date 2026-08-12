@@ -6,13 +6,12 @@ plugins {
 }
 
 group = "com.mieai.qqbot.plugin"
-version = providers.gradleProperty("pluginVersion").orElse("0.0.2").get()
+version = providers.gradleProperty("pluginVersion").orElse("0.0.3").get()
 
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
     }
-    withSourcesJar()
 }
 
 val sdkRepository = providers.gradleProperty("qqbotSdkRepository")

@@ -42,9 +42,6 @@ data class MiersConfiguration(
         return groupId in blockedGroups
     }
 
-    /** Alias used by command handlers that treat the list as a deny-list. */
-    fun isBlocked(groupId: String): Boolean = isGroupBlocked(groupId)
-
     /** Returns an immutable, sorted copy suitable for a store snapshot. */
     fun immutableCopy(): MiersConfiguration = copy(
         blockedGroups = immutableSortedSet(blockedGroups),
@@ -55,14 +52,6 @@ data class MiersConfiguration(
         const val DEFAULT_COOLDOWN_MINUTES: Int = 0
         const val MAX_MESSAGE_CODE_POINTS: Int = 4_000
 
-        @JvmStatic
-        fun defaults(): MiersConfiguration = MiersConfiguration().immutableCopy()
-
-        @JvmStatic
-        fun parse(content: String): MiersConfiguration = MiersConfigurationCodec.parse(content)
-
-        @JvmStatic
-        fun render(configuration: MiersConfiguration): String = MiersConfigurationCodec.render(configuration)
     }
 }
 
@@ -264,11 +253,7 @@ class MiersConfigurationStore private constructor(
 
     fun snapshot(): MiersConfiguration = current.get()
 
-    fun current(): MiersConfiguration = snapshot()
-
     fun isGroupBlocked(groupId: String): Boolean = snapshot().isGroupBlocked(groupId)
-
-    fun isBlocked(groupId: String): Boolean = isGroupBlocked(groupId)
 
     /**
      * Toggles a group's deny-list entry and returns the resulting state: true when
@@ -288,39 +273,10 @@ class MiersConfigurationStore private constructor(
         nowBlocked
     }
 
-    /** Explicit toggle variant for handlers that already know the target state. */
-    fun setGroupBlocked(groupId: String, blocked: Boolean): MiersConfiguration = writeLock.withLock {
-        validateGroupId("groupId", groupId)
-        val before = current.get()
-        val nextBlocked = before.blockedGroups.toMutableSet()
-        if (blocked) nextBlocked.add(groupId) else nextBlocked.remove(groupId)
-        val next = before.copy(blockedGroups = nextBlocked).immutableCopy()
-        if (next != before) {
-            writeAtomically(configurationFile, MiersConfigurationCodec.render(next))
-            current.set(next)
-        }
-        next
-    }
-
-    fun replace(configuration: MiersConfiguration): MiersConfiguration = update { configuration }
-
-    fun update(transform: (MiersConfiguration) -> MiersConfiguration): MiersConfiguration = writeLock.withLock {
-        val next = transform(current.get()).immutableCopy()
-        writeAtomically(configurationFile, MiersConfigurationCodec.render(next))
-        current.set(next)
-        next
-    }
-
     companion object {
         @JvmStatic
         fun open(configurationFile: Path, configurationContent: String): MiersConfigurationStore =
             MiersConfigurationStore(configurationFile, MiersConfigurationCodec.parse(configurationContent))
-
-        @JvmStatic
-        fun load(configurationFile: Path): MiersConfigurationStore {
-            val normalized = configurationFile.toAbsolutePath().normalize()
-            return open(normalized, Files.readString(normalized, StandardCharsets.UTF_8))
-        }
 
         private fun writeAtomically(target: Path, content: String) {
             val parent = target.parent ?: throw IOException("configuration file must have a parent directory")

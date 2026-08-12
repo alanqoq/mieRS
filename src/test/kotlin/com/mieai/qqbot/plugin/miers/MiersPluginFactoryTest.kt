@@ -373,7 +373,7 @@ class MiersPluginFactoryTest {
         }
     }
 
-    private fun defaultConfiguration(): MiersConfiguration = MiersConfiguration.defaults()
+    private fun defaultConfiguration(): MiersConfiguration = MiersConfiguration()
 
     private fun readConfiguration(fixture: PluginTestContext): MiersConfiguration =
         MiersConfigurationCodec.parse(Files.readString(fixture.context.configurationFile))
