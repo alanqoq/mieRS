@@ -15,25 +15,33 @@ import kotlin.test.assertTrue
 
 class CodexRadarIqClientTest {
     @Test
-    fun `fetch calculates all 21 live IQ values and sends a fresh request every time`() {
+    fun `fetch calculates all 23 live IQ values and sends a fresh request every time`() {
         val http = RecordingHttpClient { jsonResponse(validPayload()) }
         val client = CodexRadarIqClient(http)
 
         val first = client.fetch().toCompletableFuture().join()
         val second = client.fetch().toCompletableFuture().join()
 
-        assertEquals(21, first.size)
+        assertEquals(23, first.size)
         assertEquals(first, second)
         assertEquals("GPT5.6 Sol", first.first().name)
         assertEquals("ultra", first.first().strength)
         assertEquals(75.0, first.first().iq)
+        assertEquals(5, first.first().passedTasks)
+        assertEquals(10, first.first().totalTasks)
         assertEquals("GPT5.6 Luna", first[12].name)
         assertEquals("max", first[12].strength)
         assertEquals("GPT5.5", first[17].name)
         assertEquals("xhigh", first[17].strength)
-        assertEquals("DeepSeek V4 Flash", first.last().name)
-        assertEquals("high", first.last().strength)
-        assertEquals(30.0, first.last().iq)
+        assertEquals("DeepSeek V4 Flash", first[20].name)
+        assertEquals("high", first[20].strength)
+        assertEquals(30.0, first[20].iq)
+        assertEquals("DeepSeek V4 Pro", first[21].name)
+        assertEquals(MiersModelFamily.DEEPSEEK, first[21].family)
+        assertEquals("max", first[21].strength)
+        assertEquals("DeepSeek V4 Pro", first[22].name)
+        assertEquals(MiersModelFamily.DEEPSEEK, first[22].family)
+        assertEquals("high", first[22].strength)
 
         val requests = http.requests()
         assertEquals(2, requests.size)
@@ -82,17 +90,45 @@ class CodexRadarIqClientTest {
     }
 
     @Test
-    fun `fetch rejects duplicate missing and unknown model combinations`() {
+    fun `fetch rejects duplicate and missing model combinations`() {
         val duplicate = validPayload().replaceFirst("{", "{\"schema\":1,")
         assertRejected(CodexRadarIqClient(RecordingHttpClient { jsonResponse(duplicate) }), "duplicate fields")
 
         val missing = validPayload(combos = SITE_COMBOS.dropLast(1))
         assertRejected(CodexRadarIqClient(RecordingHttpClient { jsonResponse(missing) }))
+    }
 
-        val unknown = validPayload(
-            combos = SITE_COMBOS.dropLast(1) + Combo("unknown-model", "high"),
+    @Test
+    fun `fetch accepts additional combinations published by CodexRadar`() {
+        val extended = SITE_COMBOS + PRO_COMBOS + listOf(
+            Combo("deepseek-v4-flash", "low"),
+            Combo("deepseek-v4-pro", "low"),
         )
-        assertRejected(CodexRadarIqClient(RecordingHttpClient { jsonResponse(unknown) }), "unknown combination")
+
+        val models = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(validPayload(combos = extended)) },
+        ).fetch().toCompletableFuture().join()
+
+        assertEquals(23, models.size)
+    }
+
+    @Test
+    fun `fetch ignores cell payloads for additional combinations`() {
+        val extra = Combo("deepseek-v4-pro", "low")
+        val original = validPayload(combos = SITE_COMBOS + PRO_COMBOS + extra)
+        val extraCell =
+            "\"task-1|${extra.model}|${extra.effort}\":{\"ran_by\":[{\"passed\":true},{\"passed\":true}]}"
+        assertTrue(original.contains(extraCell))
+        val payload = original.replaceFirst(
+            extraCell,
+            "\"task-1|${extra.model}|${extra.effort}\":true",
+        )
+
+        val models = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(payload) },
+        ).fetch().toCompletableFuture().join()
+
+        assertEquals(23, models.size)
     }
 
     @Test
@@ -114,7 +150,7 @@ class CodexRadarIqClientTest {
     }
 
     private fun validPayload(
-        combos: List<Combo> = SITE_COMBOS,
+        combos: List<Combo> = SITE_COMBOS + PRO_COMBOS,
         noValidSamplesFor: String? = null,
     ): String {
         val taskIds = (1..TASK_COUNT).map { "task-$it" }
@@ -193,6 +229,11 @@ class CodexRadarIqClientTest {
             Combo("gpt-5.5", "xhigh"),
             Combo("deepseek-v4-flash", "max"),
             Combo("deepseek-v4-flash", "high"),
+        )
+
+        val PRO_COMBOS = listOf(
+            Combo("deepseek-v4-pro", "max"),
+            Combo("deepseek-v4-pro", "high"),
         )
     }
 }

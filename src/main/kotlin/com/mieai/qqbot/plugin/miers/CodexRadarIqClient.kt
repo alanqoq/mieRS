@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutionException
 
 private fun comboKey(model: String, effort: String): String = "$model|$effort"
 
-/** Loads and validates the current 21-model IQ table from CodexRadar. */
+/** Loads and validates the current 23-model IQ table from CodexRadar. */
 class CodexRadarIqClient(
     private val httpClient: PluginHttpClient,
 ) {
@@ -122,7 +122,9 @@ class CodexRadarIqClient(
 
         if (schema != SCHEMA_VERSION) invalid("schema must be 1")
         val verifiedCombos = combos ?: invalid("combos is required")
-        if (verifiedCombos != EXPECTED_COMBO_KEYS) invalid("combos must contain exactly the 21 supported combinations")
+        if (!verifiedCombos.containsAll(EXPECTED_COMBO_KEYS)) {
+            invalid("combos must contain all supported combinations")
+        }
         val verifiedTasks = taskIds ?: invalid("tasks is required")
         if (verifiedTasks.isEmpty()) invalid("tasks must not be empty")
         val verifiedCells = cells ?: invalid("cells is required")
@@ -142,11 +144,10 @@ class CodexRadarIqClient(
         while (reader.hasNext()) {
             val combo = readCombo(reader)
             val key = comboKey(combo.model, combo.effort)
-            if (key !in EXPECTED_COMBO_BY_KEY) invalid("combos contain an unknown combination")
             if (!seen.add(key)) invalid("combos contain a duplicate combination")
         }
         reader.endArray()
-        if (seen != EXPECTED_COMBO_KEYS) invalid("combos are incomplete")
+        if (!seen.containsAll(EXPECTED_COMBO_KEYS)) invalid("combos are incomplete")
         return seen
     }
 
@@ -203,13 +204,18 @@ class CodexRadarIqClient(
 
     private fun readCells(reader: JsonReader): Map<String, Boolean?> {
         if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("cells must be an object")
+        val seen = HashSet<String>()
         val cells = HashMap<String, Boolean?>()
         reader.beginObject()
         while (reader.hasNext()) {
             val key = reader.nextName()
-            if (cells.containsKey(key)) invalid("cells contain a duplicate key")
-            parseCellKey(key)
-            cells[key] = readCell(reader)
+            if (!seen.add(key)) invalid("cells contain a duplicate key")
+            val combo = parseCellKey(key).second
+            if (combo in EXPECTED_COMBO_BY_KEY) {
+                cells[key] = readCell(reader)
+            } else {
+                reader.skipValue()
+            }
         }
         reader.endObject()
         return cells
@@ -280,7 +286,14 @@ class CodexRadarIqClient(
 
             val iq = passedTasks.toDouble() / validTasks.toDouble() * IQ_MULTIPLIER
             if (!iq.isFinite() || iq !in IQ_MIN..IQ_MAX) invalid("computed IQ is outside the supported range")
-            MiersIqModel(combo.name, iq, combo.family, combo.effort)
+            MiersIqModel(
+                name = combo.name,
+                iq = iq,
+                family = combo.family,
+                strength = combo.effort,
+                passedTasks = passedTasks,
+                totalTasks = validTasks,
+            )
         }
     }
 
@@ -298,7 +311,6 @@ class CodexRadarIqClient(
         if (key.indexOf('|', secondSeparator + 1) >= 0) invalid("cell key has an invalid shape")
         val taskId = key.substring(0, firstSeparator)
         val combo = key.substring(firstSeparator + 1)
-        if (combo !in EXPECTED_COMBO_BY_KEY) invalid("cell key contains an unknown combination")
         return taskId to combo
     }
 
@@ -359,6 +371,8 @@ class CodexRadarIqClient(
             add(ExpectedCombo("gpt-5.5", "high", "GPT5.5", MiersModelFamily.GPT55))
             add(ExpectedCombo("deepseek-v4-flash", "max", "DeepSeek V4 Flash", MiersModelFamily.DEEPSEEK))
             add(ExpectedCombo("deepseek-v4-flash", "high", "DeepSeek V4 Flash", MiersModelFamily.DEEPSEEK))
+            add(ExpectedCombo("deepseek-v4-pro", "max", "DeepSeek V4 Pro", MiersModelFamily.DEEPSEEK))
+            add(ExpectedCombo("deepseek-v4-pro", "high", "DeepSeek V4 Pro", MiersModelFamily.DEEPSEEK))
         }
         private val EXPECTED_COMBO_BY_KEY: Map<String, ExpectedCombo> =
             EXPECTED_COMBOS.associateBy { comboKey(it.model, it.effort) }

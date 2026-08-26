@@ -10,15 +10,15 @@ import kotlin.test.assertTrue
 
 class MiersIqImageRendererTest {
     @Test
-    fun `live model table has 21 models and ranking preserves stable ties`() {
+    fun `live model table has 23 models and ranking preserves stable ties`() {
         val models = testModels()
-        assertEquals(21, models.size)
+        assertEquals(23, models.size)
         assertEquals(MiersIqImageRenderer.MODEL_COUNT, models.size)
 
         val ranked = models.withIndex()
             .sortedWith(compareByDescending<IndexedValue<MiersIqModel>> { it.value.iq }.thenBy { it.index })
             .map(IndexedValue<MiersIqModel>::value)
-        assertEquals(21, ranked.size)
+        assertEquals(23, ranked.size)
         assertEquals("GPT5.6 Sol", ranked.first().name)
         assertEquals("max", ranked.first().strength)
         assertEquals(105.8, ranked.first().iq)
@@ -38,6 +38,17 @@ class MiersIqImageRendererTest {
     }
 
     @Test
+    fun `first module groups six models and exposes averages`() {
+        val models = testModels()
+        val grouped = models.groupBy(MiersIqModel::name)
+        val displayed = listOf("GPT5.6 Sol", "GPT5.6 Terra", "GPT5.6 Luna", "GPT5.5", "DeepSeek V4 Flash", "DeepSeek V4 Pro")
+        assertEquals(displayed, grouped.keys.toList())
+        assertEquals(listOf("ultra", "max", "xhigh", "high", "medium", "low"), grouped.getValue("GPT5.6 Sol").map(MiersIqModel::strength))
+        assertEquals(93.5333333333, grouped.getValue("GPT5.6 Sol").map(MiersIqModel::iq).average(), 0.0001)
+        assertEquals(59.44, grouped.getValue("GPT5.6 Luna").map(MiersIqModel::iq).average(), 0.0001)
+    }
+
+    @Test
     fun `rendered output is a non-empty 1400 by 1750 png with bars and guides`() {
         val png = MiersIqImageRenderer(testModels()).renderPng()
         assertEquals(
@@ -51,10 +62,27 @@ class MiersIqImageRendererTest {
         assertTrue(hasNonBackgroundPixel(image))
 
         // First ranked bar is Sol blue: the filled segment is intentionally visible.
-        assertEquals(0x58A6FF, image.getRGB(500, 736) and 0x00FFFFFF)
+        assertEquals(0x58A6FF, image.getRGB(500, 454) and 0x00FFFFFF)
 
         // The 20-point guide at x=444 is drawn above the background before the rows.
-        assertTrue((711..730).any { y -> image.getRGB(444, y) != image.getRGB(0, 0) })
+        assertTrue((432..451).any { y -> image.getRGB(444, y) != image.getRGB(0, 0) })
+    }
+
+    @Test
+    fun `model cards render separate thinking strength cells`() {
+        val image = ImageIO.read(ByteArrayInputStream(MiersIqImageRenderer(testModels()).renderPng()))
+        val cardBackground = image.getRGB(100, 170)
+        val firstCell = image.getRGB(50, 220)
+        val horizontalGap = image.getRGB(108, 220)
+        val secondColumn = image.getRGB(120, 220)
+        val gap = image.getRGB(60, 247)
+        val secondCell = image.getRGB(50, 293)
+
+        assertTrue(firstCell != cardBackground)
+        assertEquals(cardBackground, horizontalGap)
+        assertEquals(firstCell, secondColumn)
+        assertEquals(cardBackground, gap)
+        assertEquals(firstCell, secondCell)
     }
 
     private fun hasNonBackgroundPixel(image: BufferedImage): Boolean {
@@ -89,5 +117,7 @@ class MiersIqImageRendererTest {
         MiersIqModel("GPT5.5", 84.4, MiersModelFamily.GPT55, "high"),
         MiersIqModel("DeepSeek V4 Flash", 92.4, MiersModelFamily.DEEPSEEK, "max"),
         MiersIqModel("DeepSeek V4 Flash", 73.7, MiersModelFamily.DEEPSEEK, "high"),
+        MiersIqModel("DeepSeek V4 Pro", 99.2, MiersModelFamily.DEEPSEEK, "max"),
+        MiersIqModel("DeepSeek V4 Pro", 90.8, MiersModelFamily.DEEPSEEK, "high"),
     )
 }
