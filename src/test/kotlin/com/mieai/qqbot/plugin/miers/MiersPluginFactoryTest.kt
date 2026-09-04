@@ -154,6 +154,33 @@ class MiersPluginFactoryTest {
     }
 
     @Test
+    fun `group mention prefix and command-only text both trigger query`() {
+        withPlugin(defaultConfiguration()) { fixture, _, _ ->
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "<@bot-openid> /miers",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-commands",
+                    authorId = "user-mention",
+                ),
+            ).toCompletableFuture().join()
+            awaitCondition { fixture.media.uploads().size == 1 }
+
+            fixture.events.emit(
+                event(
+                    fixture,
+                    "/miers",
+                    targetType = MessageTargetType.GROUP,
+                    targetId = "group-commands",
+                    authorId = "user-command-only",
+                ),
+            ).toCompletableFuture().join()
+            awaitCondition { fixture.media.uploads().size == 2 }
+        }
+    }
+
+    @Test
     fun `query stages a png and enqueues it as a passive reply`() {
         withPlugin(defaultConfiguration()) { fixture, _, _ ->
             val source = event(fixture, "/miers")

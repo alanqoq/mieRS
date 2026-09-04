@@ -1,15 +1,15 @@
-# Graph Report - .  (2026-08-26)
+# Graph Report - .  (2026-09-05)
 
 ## Corpus Check
 - cluster-only mode — file stats not available
 
 ## Summary
-- 276 nodes · 538 edges · 14 communities (13 shown, 1 thin omitted)
+- 277 nodes · 543 edges · 14 communities (13 shown, 1 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 29 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `5f6f3b2b`
+- Built from commit: `529ac673`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -32,7 +32,7 @@
 2. `MiersPlugin` - 20 edges
 3. `MiersIqImageRenderer` - 18 edges
 4. `MiersConfiguration` - 17 edges
-5. `MiersPluginFactoryTest` - 16 edges
+5. `MiersPluginFactoryTest` - 17 edges
 6. `MiersRequestQueue` - 15 edges
 7. `CodexRadarIqClientTest` - 14 edges
 8. `RecordingHttpClient` - 11 edges
@@ -103,9 +103,9 @@ _Questions this graph is uniquely positioned to answer:_
 - **Why does `MiersIqModel` connect `CodexRadarIqClient` to `MiersIqImageRenderer`, `MiersIqImageRendererTest`, `MiersPluginFactoryTest`?**
   _High betweenness centrality (0.221) - this node is a cross-community bridge._
 - **Why does `MiersIqImageRenderer` connect `MiersIqImageRenderer` to `MiersPlugin`, `MiersIqImageRendererTest`?**
-  _High betweenness centrality (0.146) - this node is a cross-community bridge._
+  _High betweenness centrality (0.145) - this node is a cross-community bridge._
 - **Why does `MiersConfiguration` connect `MiersConfiguration` to `MiersPluginFactoryTest`?**
-  _High betweenness centrality (0.137) - this node is a cross-community bridge._
+  _High betweenness centrality (0.138) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `MiersIqImageRenderer` (e.g. with `.enqueueIqImage()` and `.`model cards render separate thinking strength cells`()`) actually correct?**
   _`MiersIqImageRenderer` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 5 inferred relationships involving `MiersConfiguration` (e.g. with `.`command aliases render and reject invalid or ambiguous names`()` and `.`defaults and legacy yaml use no command aliases`()`) actually correct?**

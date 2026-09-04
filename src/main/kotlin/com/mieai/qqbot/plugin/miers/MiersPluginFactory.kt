@@ -197,7 +197,13 @@ private class MiersPlugin(
     private fun completed(): CompletionStage<Void> = CompletableFuture.completedFuture(null)
 
     private fun parseCommand(content: String?, aliases: MiersCommandAliases): MiersCommand? {
-        val tokens = content?.trim()?.split(COMMAND_WHITESPACE)?.filter(String::isNotEmpty).orEmpty()
+        val tokens = content
+            ?.trim()
+            ?.replaceFirst(COMMAND_MENTION_PREFIX, "")
+            ?.trim()
+            ?.split(COMMAND_WHITESPACE)
+            ?.filter(String::isNotEmpty)
+            .orEmpty()
         if (tokens.isEmpty()) return null
 
         val aliasCommand = tokens.first()
@@ -260,6 +266,7 @@ private class MiersPlugin(
         const val GROUP_ENABLED_TEXT = "已启用本群的 /miers 查询。"
 
         val COMMAND_WHITESPACE = Regex("\\s+")
+        val COMMAND_MENTION_PREFIX = Regex("""^(?:<@!?[^>]+>|@\S+)\s*""")
         val MESSAGE_EVENT_TYPES = setOf(
             "MESSAGE_CREATE",
             "AT_MESSAGE_CREATE",
