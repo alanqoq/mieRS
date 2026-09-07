@@ -1,7 +1,7 @@
 # MieRS MieBot 插件
 
 MieRS 是用于 MieBot 的原生 Kotlin/JVM 21 插件，基于 MieBot Plugin API/SPI
-1.0.6。每个成功进入队列的 `/miers` 查询都会实时请求 CodexRadar，计算并生成
+1.0.8。每个成功进入队列的 `/miers` 查询都会实时请求 CodexRadar，计算并生成
 23 个模型档位的 IQ 图片，再通过 MieBot 媒体 Outbox 回复触发消息。
 
 ## 指令

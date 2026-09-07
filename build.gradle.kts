@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.mieai.qqbot.plugin"
-version = providers.gradleProperty("pluginVersion").orElse("0.0.5").get()
+version = providers.gradleProperty("pluginVersion").orElse("0.0.6").get()
 
 java {
     toolchain {
@@ -33,12 +33,12 @@ configurations.testRuntimeOnly {
 }
 
 dependencies {
-    compileOnly("com.mieai.qqbot:qqbot-plugin-api:1.0.6")
-    compileOnly("com.mieai.qqbot:qqbot-plugin-spi:1.0.6")
+    compileOnly("com.mieai.qqbot:qqbot-plugin-api:1.0.8")
+    compileOnly("com.mieai.qqbot:qqbot-plugin-spi:1.0.8")
     embeddedLibraries("com.google.code.gson:gson:2.13.1")
     embeddedLibraries("org.yaml:snakeyaml:2.2")
     testImplementation(kotlin("test-junit5"))
-    testImplementation("com.mieai.qqbot:qqbot-plugin-testkit:1.0.6")
+    testImplementation("com.mieai.qqbot:qqbot-plugin-testkit:1.0.8")
     testImplementation("org.yaml:snakeyaml:2.2")
     testImplementation("org.junit.jupiter:junit-jupiter:5.12.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
