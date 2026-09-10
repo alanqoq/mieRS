@@ -1,15 +1,15 @@
-# Graph Report - .  (2026-09-07)
+# Graph Report - .  (2026-09-10)
 
 ## Corpus Check
 - cluster-only mode — file stats not available
 
 ## Summary
-- 277 nodes · 543 edges · 14 communities (13 shown, 1 thin omitted)
+- 277 nodes · 541 edges · 14 communities (13 shown, 1 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 29 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `37b90377`
+- Built from commit: `da78e92d`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -81,7 +81,7 @@ Cohesion: 0.18
 Nodes (6): AutoCloseable, IllegalArgumentException, ActiveTask, MiersRequestQueue, QueuedTask, MiersRequestQueueTest
 
 ### Community 8 - "CodexRadarIqClientTest"
-Cohesion: 0.28
+Cohesion: 0.27
 Nodes (6): PluginHttpClient, PluginHttpRequest, CodexRadarIqClientTest, Combo, PluginHttpResponse, RecordingHttpClient
 
 ### Community 9 - "MiersCooldownTracker"

@@ -70,13 +70,11 @@ class CodexRadarIqClientTest {
     }
 
     @Test
-    fun `fetch rejects oversized malformed and trailing JSON responses`() {
-        val oversized = CodexRadarIqClient(
-            RecordingHttpClient {
-                PluginHttpResponse(200, jsonHeaders(), ByteArray(CodexRadarIqClient.MAX_RESPONSE_BYTES + 1))
-            },
+    fun `fetch accepts large and rejects malformed or trailing JSON responses`() {
+        val large = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(validPayload() + " ".repeat(8 * 1024 * 1024 + 1)) },
         )
-        assertRejected(oversized, "8 MiB")
+        assertEquals(23, large.fetch().toCompletableFuture().join().size)
 
         val malformed = CodexRadarIqClient(
             RecordingHttpClient { jsonResponse("{not JSON") },

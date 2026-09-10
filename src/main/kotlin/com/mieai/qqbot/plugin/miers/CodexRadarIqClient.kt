@@ -64,10 +64,6 @@ class CodexRadarIqClient(
         }
 
         val body = response.body
-        if (body.size > MAX_RESPONSE_BYTES) {
-            throw CodexRadarIqException("CodexRadar IQ response exceeds the 8 MiB limit")
-        }
-
         return try {
             parseBody(body)
         } catch (failure: CodexRadarIqException) {
@@ -353,7 +349,6 @@ class CodexRadarIqClient(
 
     companion object {
         const val ENDPOINT: String = "https://codexradar.com/api/intelligence-efficiency?refresh=1"
-        const val MAX_RESPONSE_BYTES: Int = 8 * 1024 * 1024
 
         private const val HTTP_OK = 200
         private const val SCHEMA_VERSION = 1
