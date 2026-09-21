@@ -88,12 +88,25 @@ class CodexRadarIqClientTest {
     }
 
     @Test
-    fun `fetch rejects duplicate and missing model combinations`() {
+    fun `fetch rejects duplicate fields and tables without supported combinations`() {
         val duplicate = validPayload().replaceFirst("{", "{\"schema\":1,")
         assertRejected(CodexRadarIqClient(RecordingHttpClient { jsonResponse(duplicate) }), "duplicate fields")
 
-        val missing = validPayload(combos = SITE_COMBOS.dropLast(1))
-        assertRejected(CodexRadarIqClient(RecordingHttpClient { jsonResponse(missing) }))
+        val unsupported = validPayload(combos = listOf(Combo("unknown-model", "low")))
+        assertRejected(
+            CodexRadarIqClient(RecordingHttpClient { jsonResponse(unsupported) }),
+            "no supported combinations",
+        )
+    }
+
+    @Test
+    fun `fetch tolerates supported combinations removed upstream`() {
+        val models = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(validPayload(combos = SITE_COMBOS)) },
+        ).fetch().toCompletableFuture().join()
+
+        assertEquals(21, models.size)
+        assertTrue(models.none { it.name == "DeepSeek V4 Pro" })
     }
 
     @Test

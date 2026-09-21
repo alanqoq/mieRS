@@ -230,7 +230,7 @@ private class MiersPlugin(
 
     private fun helpText(aliases: MiersCommandAliases): String = buildString {
         append(commandLabel("/miers", aliases.query))
-        appendLine(" - 实时抓取并发送 23 个模型档位的 IQ 图片")
+        appendLine(" - 实时抓取并发送可用模型档位的 IQ 图片")
         append(commandLabel("/miers help", aliases.help))
         appendLine(" - 查看本插件全部指令及作用")
         append(commandLabel("/miers st", aliases.toggle))

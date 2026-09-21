@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutionException
 
 private fun comboKey(model: String, effort: String): String = "$model|$effort"
 
-/** Loads and validates the current 23-model IQ table from CodexRadar. */
+/** Loads and validates the available preferred IQ tiers from CodexRadar. */
 class CodexRadarIqClient(
     private val httpClient: PluginHttpClient,
 ) {
@@ -85,7 +85,7 @@ class CodexRadarIqClient(
                 if (reader.peek() != JsonToken.END_DOCUMENT) {
                     invalid("JSON contains trailing data")
                 }
-                buildModels(payload.taskIds, payload.cells)
+                buildModels(payload.combos, payload.taskIds, payload.cells)
             }
         }
     }
@@ -118,9 +118,7 @@ class CodexRadarIqClient(
 
         if (schema != SCHEMA_VERSION) invalid("schema must be 1")
         val verifiedCombos = combos ?: invalid("combos is required")
-        if (!verifiedCombos.containsAll(EXPECTED_COMBO_KEYS)) {
-            invalid("combos must contain all supported combinations")
-        }
+        if (verifiedCombos.isEmpty()) invalid("combos must not be empty")
         val verifiedTasks = taskIds ?: invalid("tasks is required")
         if (verifiedTasks.isEmpty()) invalid("tasks must not be empty")
         val verifiedCells = cells ?: invalid("cells is required")
@@ -130,7 +128,7 @@ class CodexRadarIqClient(
             val taskId = parseCellKey(key).first
             if (taskId !in taskSet) invalid("cells contain an unknown task")
         }
-        return ParsedPayload(verifiedTasks, verifiedCells)
+        return ParsedPayload(verifiedCombos, verifiedTasks, verifiedCells)
     }
 
     private fun readCombos(reader: JsonReader): Set<String> {
@@ -143,7 +141,6 @@ class CodexRadarIqClient(
             if (!seen.add(key)) invalid("combos contain a duplicate combination")
         }
         reader.endArray()
-        if (!seen.containsAll(EXPECTED_COMBO_KEYS)) invalid("combos are incomplete")
         return seen
     }
 
@@ -269,8 +266,15 @@ class CodexRadarIqClient(
         return passed
     }
 
-    private fun buildModels(taskIds: List<String>, cells: Map<String, Boolean?>): List<MiersIqModel> {
-        return EXPECTED_COMBOS.map { combo ->
+    private fun buildModels(
+        combos: Set<String>,
+        taskIds: List<String>,
+        cells: Map<String, Boolean?>,
+    ): List<MiersIqModel> {
+        val models = EXPECTED_COMBOS.mapNotNull { combo ->
+            val key = comboKey(combo.model, combo.effort)
+            if (key !in combos) return@mapNotNull null
+
             var validTasks = 0
             var passedTasks = 0
             taskIds.forEach { taskId ->
@@ -291,6 +295,8 @@ class CodexRadarIqClient(
                 totalTasks = validTasks,
             )
         }
+        if (models.isEmpty()) invalid("no supported combinations have valid samples")
+        return models
     }
 
     private fun readString(reader: JsonReader, field: String): String {
@@ -331,6 +337,7 @@ class CodexRadarIqClient(
         throw CodexRadarIqException("CodexRadar IQ response is invalid: $detail")
 
     private data class ParsedPayload(
+        val combos: Set<String>,
         val taskIds: List<String>,
         val cells: Map<String, Boolean?>,
     )
@@ -371,7 +378,6 @@ class CodexRadarIqClient(
         }
         private val EXPECTED_COMBO_BY_KEY: Map<String, ExpectedCombo> =
             EXPECTED_COMBOS.associateBy { comboKey(it.model, it.effort) }
-        private val EXPECTED_COMBO_KEYS: Set<String> = EXPECTED_COMBO_BY_KEY.keys
     }
 }
 

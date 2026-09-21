@@ -56,7 +56,9 @@ class MiersIqImageRenderer(
     private val models: List<MiersIqModel>,
 ) {
     init {
-        require(models.size == MODEL_COUNT) { "the live IQ table must contain exactly " + MODEL_COUNT + " models" }
+        require(models.isNotEmpty() && models.size <= MODEL_COUNT) {
+            "the live IQ table must contain between 1 and " + MODEL_COUNT + " models"
+        }
     }
 
     fun renderPng(): ByteArray {
