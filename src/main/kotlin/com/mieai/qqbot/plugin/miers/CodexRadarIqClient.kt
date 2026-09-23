@@ -98,7 +98,7 @@ class CodexRadarIqClient(
         var schema: Int? = null
         var combos: Set<String>? = null
         var taskIds: List<String>? = null
-        var cells: Map<String, Boolean?>? = null
+        var cells: Map<String, CellStats?>? = null
         while (reader.hasNext()) {
             val name = reader.nextName()
             if (!fields.add(name)) invalid("top-level JSON contains duplicate fields")
@@ -195,10 +195,10 @@ class CodexRadarIqClient(
         return taskIds
     }
 
-    private fun readCells(reader: JsonReader): Map<String, Boolean?> {
+    private fun readCells(reader: JsonReader): Map<String, CellStats?> {
         if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("cells must be an object")
         val seen = HashSet<String>()
-        val cells = HashMap<String, Boolean?>()
+        val cells = HashMap<String, CellStats?>()
         reader.beginObject()
         while (reader.hasNext()) {
             val key = reader.nextName()
@@ -214,21 +214,32 @@ class CodexRadarIqClient(
         return cells
     }
 
-    private fun readCell(reader: JsonReader): Boolean? {
+    private fun readCell(reader: JsonReader): CellStats? {
         if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("each cell must be an object")
         reader.beginObject()
         val fields = HashSet<String>()
         var firstPassed: Boolean? = null
+        var totalN: Int? = null
+        var totalP: Int? = null
         while (reader.hasNext()) {
             val name = reader.nextName()
             if (!fields.add(name)) invalid("cell objects contain duplicate fields")
             when (name) {
                 "ran_by" -> firstPassed = readRanBy(reader)
+                "total_n" -> totalN = readNonNegativeInt(reader, "cell total_n")
+                "total_p" -> totalP = readNonNegativeInt(reader, "cell total_p")
+                "rate" -> reader.skipValue()
                 else -> reader.skipValue()
             }
         }
         reader.endObject()
-        return firstPassed
+        if (totalN != null || totalP != null) {
+            val n = totalN ?: invalid("cell total_n is missing")
+            val p = totalP ?: invalid("cell total_p is missing")
+            if (p > n) invalid("cell total_p exceeds total_n")
+            return if (n == 0) null else CellStats(p, n)
+        }
+        return firstPassed?.let { passed -> CellStats(if (passed) 1 else 0, 1) }
     }
 
     private fun readRanBy(reader: JsonReader): Boolean? {
@@ -269,7 +280,7 @@ class CodexRadarIqClient(
     private fun buildModels(
         combos: Set<String>,
         taskIds: List<String>,
-        cells: Map<String, Boolean?>,
+        cells: Map<String, CellStats?>,
     ): List<MiersIqModel> {
         val models = EXPECTED_COMBOS.mapNotNull { combo ->
             val key = comboKey(combo.model, combo.effort)
@@ -278,9 +289,9 @@ class CodexRadarIqClient(
             var validTasks = 0
             var passedTasks = 0
             taskIds.forEach { taskId ->
-                val passed = cells["$taskId|${combo.model}|${combo.effort}"] ?: return@forEach
-                validTasks++
-                if (passed) passedTasks++
+                val stats = cells["$taskId|${combo.model}|${combo.effort}"] ?: return@forEach
+                validTasks += stats.total
+                passedTasks += stats.passed
             }
             if (validTasks == 0) return@mapNotNull null
 
@@ -302,6 +313,17 @@ class CodexRadarIqClient(
     private fun readString(reader: JsonReader, field: String): String {
         if (reader.peek() != JsonToken.STRING) invalid("$field must be a string")
         return reader.nextString()
+    }
+
+    private fun readNonNegativeInt(reader: JsonReader, field: String): Int {
+        if (reader.peek() != JsonToken.NUMBER) invalid("$field must be a non-negative integer")
+        val value = try {
+            reader.nextInt()
+        } catch (_: Exception) {
+            invalid("$field must be a non-negative integer")
+        }
+        if (value < 0) invalid("$field must be a non-negative integer")
+        return value
     }
 
     private fun parseCellKey(key: String): Pair<String, String> {
@@ -339,8 +361,10 @@ class CodexRadarIqClient(
     private data class ParsedPayload(
         val combos: Set<String>,
         val taskIds: List<String>,
-        val cells: Map<String, Boolean?>,
+        val cells: Map<String, CellStats?>,
     )
+
+    private data class CellStats(val passed: Int, val total: Int)
 
     private data class ComboFields(
         val model: String,

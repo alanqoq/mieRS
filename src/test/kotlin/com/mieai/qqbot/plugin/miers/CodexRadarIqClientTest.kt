@@ -185,6 +185,25 @@ class CodexRadarIqClientTest {
         )
     }
 
+    @Test
+    fun `fetch uses aggregated cell counts and skips zero sample cells`() {
+        val payload = """
+            {"schema":1,"combos":[{"model":"gpt-5.6-sol","effort":"low"},{"model":"gpt-5.6-sol","effort":"medium"}],"tasks":[{"id":"task-1"},{"id":"task-2"}],"cells":{
+              "task-1|gpt-5.6-sol|low":{"total_n":24,"total_p":19,"rate":0.0},
+              "task-2|gpt-5.6-sol|low":{"total_n":0,"total_p":0,"rate":0.0},
+              "task-1|gpt-5.6-sol|medium":{"total_n":8,"total_p":3,"rate":0.375}
+            }}
+        """.trimIndent()
+        val models = CodexRadarIqClient(RecordingHttpClient { jsonResponse(payload) })
+            .fetch().toCompletableFuture().join()
+
+        assertEquals(2, models.size)
+        assertEquals(118.75, models.first { it.strength == "low" }.iq)
+        assertEquals(56.25, models.first { it.strength == "medium" }.iq)
+        assertEquals(19, models.first { it.strength == "low" }.passedTasks)
+        assertEquals(24, models.first { it.strength == "low" }.totalTasks)
+    }
+
     private fun assertRejected(client: CodexRadarIqClient, expectedMessage: String? = null) {
         val failure = assertFailsWith<CompletionException> {
             client.fetch().toCompletableFuture().join()

@@ -4,22 +4,22 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 278 nodes · 604 edges · 14 communities
+- 281 nodes · 616 edges · 14 communities
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 31 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `b22d36dd`
+- Built from commit: `930675f7`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - MiersIqImageRenderer
+- MiersConfiguration
 - MiersPlugin
-- MiersPluginFactoryTest
 - CodexRadarIqClient
 - commandAliases
-- MiersConfiguration.kt
+- MiersPluginFactoryTest
 - CodexRadarIqClientTest
 - properties
 - MiersRequestQueue
@@ -28,14 +28,14 @@
 - MiersModelFamily
 
 ## God Nodes (most connected - your core abstractions)
-1. `CodexRadarIqClient` - 32 edges
+1. `CodexRadarIqClient` - 35 edges
 2. `MiersIqImageRenderer` - 23 edges
 3. `MiersPlugin` - 22 edges
 4. `MiersPluginFactoryTest` - 19 edges
 5. `MiersConfiguration` - 17 edges
-6. `MiersRequestQueue` - 16 edges
-7. `CodexRadarIqClientTest` - 16 edges
-8. `RecordingHttpClient` - 13 edges
+6. `CodexRadarIqClientTest` - 17 edges
+7. `MiersRequestQueue` - 16 edges
+8. `RecordingHttpClient` - 14 edges
 9. `MiersCooldownTracker` - 11 edges
 10. `MiersIqModel` - 11 edges
 
@@ -56,28 +56,28 @@
 Cohesion: 0.15
 Nodes (9): BufferedImage, Color, Font, FontMetrics, Graphics2D, ByteArray, MiersIqImageRenderer, MiersIqModel (+1 more)
 
-### Community 1 - "MiersPlugin"
+### Community 1 - "MiersConfiguration"
 Cohesion: 0.12
-Nodes (17): BotPlugin, BotPluginFactory, EventSubscription, GroupMemberRole, InboundMessage, MessageTargetType, PluginRuntimeContext, ByteArray (+9 more)
+Nodes (13): immutableSortedSet(), MiersCommandAliases, MiersConfiguration, MiersConfigurationCodec, MiersConfigurationException, MiersConfigurationStore, requireConfiguration(), validateCommandAlias() (+5 more)
 
-### Community 2 - "MiersPluginFactoryTest"
-Cohesion: 0.20
-Nodes (5): PluginTestContext, MiersCommandAliases, MiersConfiguration, MiersConfigurationTest, MiersPluginFactoryTest
+### Community 2 - "MiersPlugin"
+Cohesion: 0.13
+Nodes (14): BotPlugin, BotPluginFactory, EventSubscription, InboundMessage, PluginRuntimeContext, ByteArray, PluginEvent, MiersCommand (+6 more)
 
 ### Community 3 - "CodexRadarIqClient"
 Cohesion: 0.19
-Nodes (10): JsonReader, RuntimeException, CodexRadarIqClient, CodexRadarIqException, ComboFields, comboKey(), ExpectedCombo, ByteArray (+2 more)
+Nodes (11): JsonReader, RuntimeException, CellStats, CodexRadarIqClient, CodexRadarIqException, ComboFields, comboKey(), ExpectedCombo (+3 more)
 
 ### Community 4 - "commandAliases"
 Cohesion: 0.08
 Nodes (25): additionalProperties, default, description, properties, required, type, help, query (+17 more)
 
-### Community 5 - "MiersConfiguration.kt"
-Cohesion: 0.16
-Nodes (10): immutableSortedSet(), MiersConfigurationCodec, MiersConfigurationException, MiersConfigurationStore, requireConfiguration(), validateCommandAlias(), validateGroupId(), validateGroupIds() (+2 more)
+### Community 5 - "MiersPluginFactoryTest"
+Cohesion: 0.26
+Nodes (5): GroupMemberRole, MessageTargetType, PluginTestContext, PluginEvent, MiersPluginFactoryTest
 
 ### Community 6 - "CodexRadarIqClientTest"
-Cohesion: 0.28
+Cohesion: 0.27
 Nodes (6): PluginHttpClient, PluginHttpRequest, CodexRadarIqClientTest, Combo, PluginHttpResponse, RecordingHttpClient
 
 ### Community 7 - "properties"
@@ -107,12 +107,12 @@ Nodes (7): MiersModelFamily, ASTRA, DEEPSEEK, GPT55, LUNA, SOL, TERRA
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `MiersIqModel` connect `MiersIqImageRenderer` to `MiersPluginFactoryTest`, `CodexRadarIqClient`?**
-  _High betweenness centrality (0.276) - this node is a cross-community bridge._
+- **Why does `MiersIqModel` connect `MiersIqImageRenderer` to `CodexRadarIqClient`, `MiersPluginFactoryTest`?**
+  _High betweenness centrality (0.283) - this node is a cross-community bridge._
 - **Why does `MiersPlugin` connect `MiersPlugin` to `MiersRequestQueue`, `MiersCooldownTracker`?**
-  _High betweenness centrality (0.243) - this node is a cross-community bridge._
+  _High betweenness centrality (0.242) - this node is a cross-community bridge._
 - **Why does `MiersIqImageRenderer` connect `MiersIqImageRenderer` to `MiersPlugin`?**
-  _High betweenness centrality (0.185) - this node is a cross-community bridge._
+  _High betweenness centrality (0.186) - this node is a cross-community bridge._
 - **Are the 6 inferred relationships involving `MiersIqImageRenderer` (e.g. with `.enqueueIqImage()` and `.`model cards wrap at five and rank columns continue in global IQ order`()`) actually correct?**
   _`MiersIqImageRenderer` has 6 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `MiersPlugin` (e.g. with `MiersCooldownTracker` and `MiersRequestQueue`) actually correct?**
