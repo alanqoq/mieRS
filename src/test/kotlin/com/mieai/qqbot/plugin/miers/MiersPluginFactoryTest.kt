@@ -449,7 +449,7 @@ class MiersPluginFactoryTest {
             val strength = MiersIqModel.STRENGTHS.elementAt(index % MiersIqModel.STRENGTHS.size)
             MiersIqModel(
                 name = "Test Model ${index + 1}",
-                iq = 20.0 + (index * 4.0),
+                iq = index * MiersIqImageRenderer.IQ_SCALE_MAX / (MiersIqImageRenderer.MODEL_COUNT - 1),
                 family = family,
                 strength = strength,
             )

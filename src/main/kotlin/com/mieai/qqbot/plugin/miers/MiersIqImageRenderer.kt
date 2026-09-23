@@ -39,6 +39,7 @@ data class MiersIqModel(
 
 enum class MiersModelFamily(val rgb: Int) {
     SOL(0x58A6FF),
+    ASTRA(0xF4D35E),
     TERRA(0xF2A65A),
     LUNA(0x6BCB8B),
     GPT55(0xE68AC3),
@@ -55,19 +56,19 @@ enum class MiersModelFamily(val rgb: Int) {
 class MiersIqImageRenderer(
     private val models: List<MiersIqModel>,
 ) {
+    private val modelGroups = models.groupBy(MiersIqModel::name)
+
     init {
-        require(models.isNotEmpty() && models.size <= MODEL_COUNT) {
-            "the live IQ table must contain between 1 and " + MODEL_COUNT + " models"
-        }
+        require(models.isNotEmpty()) { "the live IQ table must not be empty" }
     }
 
     fun renderPng(): ByteArray {
-        val image = BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_ARGB)
+        val image = BufferedImage(WIDTH, imageHeight, BufferedImage.TYPE_INT_ARGB)
         val graphics = image.createGraphics()
         try {
             prepare(graphics)
             graphics.color = BACKGROUND
-            graphics.fillRect(0, 0, WIDTH, HEIGHT)
+            graphics.fillRect(0, 0, WIDTH, imageHeight)
             drawHeader(graphics)
             drawGrid(graphics)
             drawRanking(graphics)
@@ -82,19 +83,29 @@ class MiersIqImageRenderer(
         }
     }
 
+    private val rankingStartY: Int
+        get() = GRID_Y + (modelGroups.size + GRID_COLUMNS - 1) / GRID_COLUMNS * (CARD_HEIGHT + CARD_GAP_Y) + 84
+
+    private val footerY: Int
+        get() = max(FOOTER_Y, rankingStartY + ((models.size + 1) / 2) * RANK_ROW_HEIGHT + 16)
+
+    private val imageHeight: Int
+        get() = max(HEIGHT, footerY + FOOTER_GAP)
+
     private fun drawHeader(graphics: Graphics2D) {
-        drawText(graphics, "CODEXRADAR / INTELLIGENCE EFFICIENCY", eyebrowFont, MUTED, 32, 36)
-        drawText(graphics, "模型IQ", titleFont, TEXT, 30, 76)
-        drawText(graphics, "获取时间 ${LocalDateTime.now().format(FETCHED_AT_FORMATTER)}", metaFont, MUTED, 1368, 68, alignRight = true)
+        drawText(graphics, "CODEXRADAR / INTELLIGENCE EFFICIENCY", eyebrowFont, MUTED, GRID_MARGIN_X, 36)
+        drawText(graphics, "模型IQ", titleFont, TEXT, GRID_MARGIN_X, 76)
+        drawText(graphics, "获取时间 ${LocalDateTime.now().format(FETCHED_AT_FORMATTER)}", metaFont, MUTED, WIDTH - GRID_MARGIN_X, 68, alignRight = true)
     }
 
     private fun drawGrid(graphics: Graphics2D) {
-        val grouped = models.groupBy(MiersIqModel::name)
-            .toSortedMap(compareBy { MODEL_ORDER.indexOf(it).takeUnless { index -> index < 0 } ?: Int.MAX_VALUE })
+        val grouped = modelGroups
+            .toSortedMap(compareBy<String> { MODEL_ORDER.indexOf(it).takeUnless { index -> index < 0 } ?: Int.MAX_VALUE }.thenBy { it })
         grouped.entries.forEachIndexed { index, (name, entries) ->
             val column = index % GRID_COLUMNS
+            val row = index / GRID_COLUMNS
             val x = GRID_MARGIN_X + (column * (CARD_WIDTH + CARD_GAP_X))
-            val y = GRID_Y
+            val y = GRID_Y + (row * (CARD_HEIGHT + CARD_GAP_Y))
             val accent = entries.first().family.color()
 
             graphics.color = SURFACE
@@ -140,40 +151,53 @@ class MiersIqImageRenderer(
             .sortedWith(compareByDescending<IndexedValue<MiersIqModel>> { it.value.iq }.thenBy { it.index })
             .map(IndexedValue<MiersIqModel>::value)
 
-        drawText(graphics, "模型排行", titleFont, TEXT, 30, 400)
-        drawText(graphics, "按 IQ 从高到低 · 同分保持原始顺序", metaFont, MUTED, 245, 395)
-
-        val axisTopY = RANKING_START_Y - 4
-        val axisBottomY = RANKING_START_Y + (ranked.lastIndex * RANK_ROW_HEIGHT) + 33
-        TICKS.forEach { tick ->
-            val x = RANK_BAR_X + ((RANK_BAR_WIDTH * tick) / IQ_SCALE_MAX).roundToInt()
-            graphics.color = AXIS
-            graphics.stroke = BasicStroke(1f)
-            graphics.drawLine(x, axisTopY, x, axisBottomY)
-            drawText(graphics, tick.toString(), rankTickFont, MUTED, x, RANKING_START_Y - 17, centered = true)
-        }
-
-        ranked.forEachIndexed { index, model ->
-            val y = RANKING_START_Y + (index * RANK_ROW_HEIGHT)
-            val accent = model.family.color()
-            drawOutlinedPill(graphics, (index + 1).toString(), unitFont, accent, 30, y + 7, 32, 27)
-            val label = model.name + " " + model.strength
-            drawText(graphics, ellipsize(graphics.getFontMetrics(nameFont), label, RANK_BAR_X - RANK_NAME_X - 14), nameFont, TEXT, RANK_NAME_X, y + 22)
-
-            graphics.color = TRACK
-            graphics.fillRect(RANK_BAR_X, y + 18, RANK_BAR_WIDTH, 7)
-            graphics.color = accent
-            graphics.fillRect(RANK_BAR_X, y + 18, fillWidth(RANK_BAR_WIDTH, model.iq), 7)
-            drawText(graphics, formatIq(model.iq), rankScoreFont, TEXT, RANK_VALUE_X, y + 32)
+        val startY = rankingStartY
+        drawText(graphics, "模型排行", titleFont, TEXT, 30, startY - 38)
+        drawText(graphics, "按 IQ 从高到低 · 同分保持原始顺序", metaFont, MUTED, 245, startY - 41)
+        val split = (ranked.size + 1) / 2
+        listOf(ranked.take(split), ranked.drop(split)).forEachIndexed { column, columnModels ->
+            val originX = if (column == 0) RANK_LEFT_X else RANK_RIGHT_X
+            val nameX = originX + RANK_NAME_OFFSET
+            val barX = originX + RANK_BAR_OFFSET
+            val barWidth = RANK_BAR_WIDTH
+            val valueX = originX + RANK_VALUE_OFFSET
+            val axisBottomY = startY + (columnModels.lastIndex * RANK_ROW_HEIGHT) + 27
+            TICKS.forEach { tick ->
+                val x = barX + ((barWidth * tick) / IQ_SCALE_MAX).roundToInt()
+                graphics.color = AXIS
+                graphics.stroke = BasicStroke(1f)
+                graphics.drawLine(x, startY - 4, x, axisBottomY)
+                drawText(graphics, tick.toString(), rankTickFont, MUTED, x, startY - 17, centered = true)
+            }
+            columnModels.forEachIndexed { index, model ->
+                val y = startY + (index * RANK_ROW_HEIGHT)
+                val rank = index + if (column == 0) 1 else split + 1
+                val accent = model.family.color()
+                drawOutlinedPill(graphics, rank.toString(), unitFont, accent, originX, y + 3, 32, 24)
+                val labelWidth = barX - nameX - 14
+                val combinedLabel = model.name + " " + model.strength
+                val label = if (graphics.getFontMetrics(nameFont).stringWidth(combinedLabel) <= labelWidth) {
+                    combinedLabel
+                } else {
+                    model.name
+                }
+                val labelFont = fitFont(graphics, label, labelWidth)
+                drawText(graphics, label, labelFont, TEXT, nameX, y + 19)
+                graphics.color = TRACK
+                graphics.fillRect(barX, y + 14, barWidth, 7)
+                graphics.color = accent
+                graphics.fillRect(barX, y + 14, fillWidth(barWidth, model.iq), 7)
+                drawText(graphics, formatIq(model.iq), rankScoreFont, TEXT, valueX, y + 26)
+            }
         }
     }
 
     private fun drawFooter(graphics: Graphics2D) {
         graphics.color = BORDER
         graphics.stroke = BasicStroke(1f)
-        graphics.drawLine(32, FOOTER_Y, WIDTH - 32, FOOTER_Y)
-        drawText(graphics, "IQ 参考尺度 0-120", metaFont, MUTED, 32, FOOTER_Y + 33)
-        drawText(graphics, "来源 codexradar.com | 实时抓取", metaFont, MUTED, WIDTH - 32, FOOTER_Y + 33, alignRight = true)
+        graphics.drawLine(GRID_MARGIN_X, footerY, WIDTH - GRID_MARGIN_X, footerY)
+        drawText(graphics, "IQ 参考尺度 0-120", metaFont, MUTED, GRID_MARGIN_X, footerY + 33)
+        drawText(graphics, "来源 codexradar.com | 实时抓取", metaFont, MUTED, WIDTH - GRID_MARGIN_X, footerY + 33, alignRight = true)
     }
 
     private fun prepare(graphics: Graphics2D) {
@@ -246,6 +270,14 @@ class MiersIqImageRenderer(
         return text.substring(0, end) + suffix
     }
 
+    private fun fitFont(graphics: Graphics2D, text: String, maxWidth: Int): Font {
+        var font = nameFont
+        while (font.size2D > 8f && graphics.getFontMetrics(font).stringWidth(text) > maxWidth) {
+            font = font.deriveFont(font.size2D - 0.5f)
+        }
+        return font
+    }
+
     private fun fontMetrics(graphics: Graphics2D, font: Font): FontMetrics {
         graphics.font = font
         return graphics.fontMetrics
@@ -257,18 +289,19 @@ class MiersIqImageRenderer(
     private fun formatIq(value: Double): String = String.format(Locale.ROOT, "%.1f", value)
 
     companion object {
-        const val WIDTH: Int = 1400
+        const val WIDTH: Int = 1210
         const val HEIGHT: Int = 1750
-        const val MODEL_COUNT: Int = 23
+        const val MODEL_COUNT: Int = 29
         const val IQ_SCALE_MAX: Double = 120.0
 
-        private const val GRID_COLUMNS = 6
-        private const val GRID_MARGIN_X = 32
+        private const val GRID_COLUMNS = 5
+        private const val GRID_MARGIN_X = 24
         private const val GRID_Y = 110
         private const val CARD_WIDTH = 220
         private const val CARD_HEIGHT = 230
         private const val CARD_RADIUS = 7
         private const val CARD_GAP_X = 6
+        private const val CARD_GAP_Y = 12
         private const val CARD_PADDING = 14
         private const val CARD_CELL_TOP = 68
         private const val CARD_CELL_COLUMNS = 3
@@ -279,13 +312,15 @@ class MiersIqImageRenderer(
         private const val CARD_CELL_RADIUS = 6
         private const val CARD_BADGE_SIZE = 30
         private const val CARD_BADGE_RADIUS = 7
-        private const val RANKING_START_Y = 436
-        private const val RANK_ROW_HEIGHT = 38
-        private const val RANK_NAME_X = 76
-        private const val RANK_BAR_X = 300
-        private const val RANK_BAR_WIDTH = 865
-        private const val RANK_VALUE_X = 1204
+        private const val RANK_ROW_HEIGHT = 29
+        private const val RANK_LEFT_X = 35
+        private const val RANK_RIGHT_X = 625
+        private const val RANK_NAME_OFFSET = 45
+        private const val RANK_BAR_OFFSET = 175
+        private const val RANK_BAR_WIDTH = 320
+        private const val RANK_VALUE_OFFSET = 507
         private const val FOOTER_Y = 1640
+        private const val FOOTER_GAP = 72
 
         private val TICKS = listOf(0, 20, 40, 60, 80, 100, 120)
         private val FETCHED_AT_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT)
@@ -308,9 +343,9 @@ class MiersIqImageRenderer(
         private val badgeFont = Font("Segoe UI", Font.BOLD, 9)
         private val rankTickFont = Font("Segoe UI", Font.PLAIN, 14)
         private val unitFont = Font("Segoe UI", Font.PLAIN, 13)
-        private val rankScoreFont = Font("Segoe UI", Font.BOLD, 30)
+        private val rankScoreFont = Font("Segoe UI", Font.BOLD, 20)
         private val STRENGTH_ORDER = listOf("ultra", "max", "xhigh", "high", "medium", "low")
-        private val MODEL_ORDER = listOf("GPT5.6 Sol", "GPT5.6 Terra", "GPT5.6 Luna", "GPT5.5", "DeepSeek V4 Flash", "DeepSeek V4 Pro")
+        private val MODEL_ORDER = listOf("GPT5.6 Sol", "GPT5.6 Terra", "GPT5.6 Luna", "GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "GPT5.5", "DeepSeek V4 Flash", "DeepSeek V4 Pro", "DeepSeek V4.1 Flash", "DeepSeek V4 Flash DSH", "DeepSeek V4.1 Flash DSH", "DeepSeek V4 Flash Vision DSH")
 
         private fun color(hex: String): Color = Color(Integer.parseInt(hex.removePrefix("#"), 16))
     }

@@ -1,8 +1,8 @@
 # MieRS MieBot 插件
 
 MieRS 是用于 MieBot 的原生 Kotlin/JVM 21 插件，基于 MieBot Plugin API/SPI
-1.0.8。每个成功进入队列的 `/miers` 查询都会实时请求 CodexRadar，计算并生成
-最多 23 个受支持模型档位的 IQ 图片，再通过 MieBot 媒体 Outbox 回复触发消息。
+1.0.9。每个成功进入队列的 `/miers` 查询都会实时请求 CodexRadar，计算并生成
+当前接口中可识别 GPT 与 DeepSeek 模型档位的 IQ 图片，再通过 MieBot 媒体 Outbox 回复触发消息。
 
 ## 指令
 
@@ -47,7 +47,7 @@ https://codexradar.com/api/intelligence-efficiency?refresh=1
 ```
 
 插件使用 CodexRadar 页面相同的公式 `通过题数 / 有效题数 * 150` 计算 IQ。
-请求超时为 20 秒，并读取当前接口仍提供的受支持模型档位，最多生成 23 个档位。
+请求超时为 20 秒，并读取当前接口仍提供的 GPT 与 DeepSeek 模型档位。缺少单个组合或该档位没有有效样本时仅省略该档位；所有可识别档位均无有效样本时才报告失败。
 抓取、解析或图片生成失败时会回复失败提示，不会回退到内置旧数据或发送旧图片。
 
 ## 配置

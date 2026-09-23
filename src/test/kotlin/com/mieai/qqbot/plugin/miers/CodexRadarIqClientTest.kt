@@ -15,14 +15,14 @@ import kotlin.test.assertTrue
 
 class CodexRadarIqClientTest {
     @Test
-    fun `fetch calculates all 23 live IQ values and sends a fresh request every time`() {
+    fun `fetch calculates all 29 live IQ values and sends a fresh request every time`() {
         val http = RecordingHttpClient { jsonResponse(validPayload()) }
         val client = CodexRadarIqClient(http)
 
         val first = client.fetch().toCompletableFuture().join()
         val second = client.fetch().toCompletableFuture().join()
 
-        assertEquals(23, first.size)
+        assertEquals(29, first.size)
         assertEquals(first, second)
         assertEquals("GPT5.6 Sol", first.first().name)
         assertEquals("ultra", first.first().strength)
@@ -31,17 +31,22 @@ class CodexRadarIqClientTest {
         assertEquals(10, first.first().totalTasks)
         assertEquals("GPT5.6 Luna", first[12].name)
         assertEquals("max", first[12].strength)
-        assertEquals("GPT5.5", first[17].name)
-        assertEquals("xhigh", first[17].strength)
-        assertEquals("DeepSeek V4 Flash", first[20].name)
-        assertEquals("high", first[20].strength)
-        assertEquals(30.0, first[20].iq)
-        assertEquals("DeepSeek V4 Pro", first[21].name)
-        assertEquals(MiersModelFamily.DEEPSEEK, first[21].family)
-        assertEquals("max", first[21].strength)
-        assertEquals("DeepSeek V4 Pro", first[22].name)
-        assertEquals(MiersModelFamily.DEEPSEEK, first[22].family)
-        assertEquals("high", first[22].strength)
+        val astra = first.filter { it.name == "GPT-6 Astra" }
+        assertEquals(6, astra.size)
+        assertEquals(listOf("ultra", "max", "xhigh", "high", "medium", "low"), astra.map { it.strength })
+        assertTrue(astra.all { it.family == MiersModelFamily.ASTRA })
+        assertEquals("GPT-6 Astra", astra.first().name)
+        assertEquals("GPT5.5", first[23].name)
+        assertEquals("xhigh", first[23].strength)
+        assertEquals("DeepSeek V4 Flash", first[25].name)
+        assertEquals("max", first[25].strength)
+        assertEquals(15.0, first[25].iq)
+        assertEquals("DeepSeek V4 Pro", first[27].name)
+        assertEquals(MiersModelFamily.DEEPSEEK, first[27].family)
+        assertEquals("max", first[27].strength)
+        assertEquals("DeepSeek V4 Pro", first[28].name)
+        assertEquals(MiersModelFamily.DEEPSEEK, first[28].family)
+        assertEquals("high", first[28].strength)
 
         val requests = http.requests()
         assertEquals(2, requests.size)
@@ -74,7 +79,7 @@ class CodexRadarIqClientTest {
         val large = CodexRadarIqClient(
             RecordingHttpClient { jsonResponse(validPayload() + " ".repeat(8 * 1024 * 1024 + 1)) },
         )
-        assertEquals(23, large.fetch().toCompletableFuture().join().size)
+        assertEquals(29, large.fetch().toCompletableFuture().join().size)
 
         val malformed = CodexRadarIqClient(
             RecordingHttpClient { jsonResponse("{not JSON") },
@@ -107,6 +112,31 @@ class CodexRadarIqClientTest {
 
         assertEquals(21, models.size)
         assertTrue(models.none { it.name == "DeepSeek V4 Pro" })
+    }
+
+    @Test
+    fun `fetch recognizes current GPT and DeepSeek combinations and omits missing or invalid tiers`() {
+        val current = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(validPayload(combos = CURRENT_COMBOS)) },
+        ).fetch().toCompletableFuture().join()
+        assertEquals(46, current.size)
+        assertTrue(current.any { it.name == "GPT-6 Sol" })
+        assertTrue(current.any { it.name == "GPT-6 Luna" && it.strength == "low" })
+        assertTrue(current.any { it.name == "DeepSeek V4.1 Flash" })
+        assertTrue(current.any { it.name == "DeepSeek V4 Flash DSH" })
+        assertTrue(current.any { it.name == "DeepSeek V4 Flash Vision DSH" })
+
+        val missing = CURRENT_COMBOS.filterNot { it == Combo("gpt-6-astra", "ultra") }
+        val missingModels = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(validPayload(combos = missing)) },
+        ).fetch().toCompletableFuture().join()
+        assertEquals(45, missingModels.size)
+        assertTrue(missingModels.none { it.name == "GPT-6 Astra" && it.strength == "ultra" })
+
+        val partial = validPayload(combos = CURRENT_COMBOS, noValidSamplesFor = "gpt-6-astra|ultra")
+        val partialModels = CodexRadarIqClient(RecordingHttpClient { jsonResponse(partial) }).fetch().toCompletableFuture().join()
+        assertEquals(45, partialModels.size)
+        assertTrue(partialModels.any { it.name == "GPT-6 Astra" && it.strength == "max" })
     }
 
     @Test
@@ -143,12 +173,15 @@ class CodexRadarIqClientTest {
     }
 
     @Test
-    fun `fetch rejects tables whose model has no valid first-run sample`() {
-        val unavailable = validPayload(noValidSamplesFor = "gpt-5.6-sol|low")
+    fun `fetch rejects only when no supported combinations have valid samples`() {
+        val partial = validPayload(noValidSamplesFor = "gpt-5.6-sol|low")
+        val retained = CodexRadarIqClient(RecordingHttpClient { jsonResponse(partial) }).fetch().toCompletableFuture().join()
+        assertEquals(28, retained.size)
+        assertTrue(retained.none { it.name == "GPT5.6 Sol" && it.strength == "low" })
 
         assertRejected(
-            CodexRadarIqClient(RecordingHttpClient { jsonResponse(unavailable) }),
-            "no valid samples",
+            CodexRadarIqClient(RecordingHttpClient { jsonResponse(validPayload(noValidSamplesFor = "*")) }),
+            "no supported combinations",
         )
     }
 
@@ -161,7 +194,7 @@ class CodexRadarIqClientTest {
     }
 
     private fun validPayload(
-        combos: List<Combo> = SITE_COMBOS + PRO_COMBOS,
+        combos: List<Combo> = SITE_COMBOS + ASTRA_COMBOS + PRO_COMBOS,
         noValidSamplesFor: String? = null,
     ): String {
         val taskIds = (1..TASK_COUNT).map { "task-$it" }
@@ -174,7 +207,7 @@ class CodexRadarIqClientTest {
                 combos.forEachIndexed { comboIndex, combo ->
                     val key = "${combo.model}|${combo.effort}"
                     val firstRun = when {
-                        key == noValidSamplesFor -> "{}"
+                        noValidSamplesFor == "*" || key == noValidSamplesFor -> "{}"
                         taskId.removePrefix("task-").toInt() <= comboIndex % 9 -> "{\"passed\":true}"
                         else -> "{\"passed\":false}"
                     }
@@ -245,6 +278,36 @@ class CodexRadarIqClientTest {
         val PRO_COMBOS = listOf(
             Combo("deepseek-v4-pro", "max"),
             Combo("deepseek-v4-pro", "high"),
+        )
+
+        val ASTRA_COMBOS = listOf(
+            Combo("gpt-6-astra", "low"),
+            Combo("gpt-6-astra", "medium"),
+            Combo("gpt-6-astra", "high"),
+            Combo("gpt-6-astra", "xhigh"),
+            Combo("gpt-6-astra", "max"),
+            Combo("gpt-6-astra", "ultra"),
+        )
+
+        val CURRENT_COMBOS = listOf(
+            Combo("gpt-5.6-sol", "low"), Combo("gpt-5.6-sol", "medium"), Combo("gpt-5.6-sol", "high"),
+            Combo("gpt-5.6-sol", "xhigh"), Combo("gpt-5.6-sol", "max"), Combo("gpt-5.6-sol", "ultra"),
+            Combo("gpt-5.6-terra", "low"), Combo("gpt-5.6-terra", "medium"), Combo("gpt-5.6-terra", "high"),
+            Combo("gpt-5.6-terra", "xhigh"), Combo("gpt-5.6-terra", "max"), Combo("gpt-5.6-terra", "ultra"),
+            Combo("gpt-5.6-luna", "low"), Combo("gpt-5.6-luna", "medium"), Combo("gpt-5.6-luna", "high"),
+            Combo("gpt-5.6-luna", "xhigh"), Combo("gpt-5.6-luna", "max"),
+            Combo("gpt-6-astra", "low"), Combo("gpt-6-astra", "medium"), Combo("gpt-6-astra", "high"),
+            Combo("gpt-6-astra", "xhigh"), Combo("gpt-6-astra", "max"), Combo("gpt-6-astra", "ultra"),
+            Combo("gpt-6-sol", "low"), Combo("gpt-6-sol", "medium"), Combo("gpt-6-sol", "high"),
+            Combo("gpt-6-sol", "xhigh"), Combo("gpt-6-sol", "max"), Combo("gpt-6-sol", "ultra"),
+            Combo("gpt-6-luna", "low"), Combo("gpt-6-luna", "medium"), Combo("gpt-6-luna", "high"),
+            Combo("gpt-6-luna", "xhigh"), Combo("gpt-6-luna", "max"),
+            Combo("gpt-5.5", "high"), Combo("gpt-5.5", "xhigh"),
+            Combo("deepseek-v4-flash", "max"), Combo("deepseek-v4-flash", "high"),
+            Combo("deepseek-v4.1-flash", "max"), Combo("deepseek-v4.1-flash", "high"),
+            Combo("dsh-deepseek-v4-flash", "max"), Combo("dsh-deepseek-v4-flash", "high"),
+            Combo("dsh-deepseek-v4.1-flash", "max"), Combo("dsh-deepseek-v4.1-flash", "high"),
+            Combo("dsh-deepseek-v4-flash-vision-exp", "max"), Combo("dsh-deepseek-v4-flash-vision-exp", "high"),
         )
     }
 }

@@ -282,7 +282,7 @@ class CodexRadarIqClient(
                 validTasks++
                 if (passed) passedTasks++
             }
-            if (validTasks == 0) invalid("a supported combination has no valid samples")
+            if (validTasks == 0) return@mapNotNull null
 
             val iq = passedTasks.toDouble() / validTasks.toDouble() * IQ_MULTIPLIER
             if (!iq.isFinite() || iq !in IQ_MIN..IQ_MAX) invalid("computed IQ is outside the supported range")
@@ -366,15 +366,22 @@ class CodexRadarIqClient(
 
         private val STRENGTHS = listOf("ultra", "max", "xhigh", "high", "medium", "low")
         private val EXPECTED_COMBOS: List<ExpectedCombo> = buildList {
-            addAll(STRENGTHS.map { effort -> ExpectedCombo("gpt-5.6-sol", effort, "GPT5.6 Sol", MiersModelFamily.SOL) })
-            addAll(STRENGTHS.map { effort -> ExpectedCombo("gpt-5.6-terra", effort, "GPT5.6 Terra", MiersModelFamily.TERRA) })
-            addAll(STRENGTHS.drop(1).map { effort -> ExpectedCombo("gpt-5.6-luna", effort, "GPT5.6 Luna", MiersModelFamily.LUNA) })
-            add(ExpectedCombo("gpt-5.5", "xhigh", "GPT5.5", MiersModelFamily.GPT55))
-            add(ExpectedCombo("gpt-5.5", "high", "GPT5.5", MiersModelFamily.GPT55))
-            add(ExpectedCombo("deepseek-v4-flash", "max", "DeepSeek V4 Flash", MiersModelFamily.DEEPSEEK))
-            add(ExpectedCombo("deepseek-v4-flash", "high", "DeepSeek V4 Flash", MiersModelFamily.DEEPSEEK))
-            add(ExpectedCombo("deepseek-v4-pro", "max", "DeepSeek V4 Pro", MiersModelFamily.DEEPSEEK))
-            add(ExpectedCombo("deepseek-v4-pro", "high", "DeepSeek V4 Pro", MiersModelFamily.DEEPSEEK))
+            fun model(id: String, name: String, family: MiersModelFamily, efforts: List<String> = STRENGTHS) {
+                addAll(efforts.map { effort -> ExpectedCombo(id, effort, name, family) })
+            }
+            model("gpt-5.6-sol", "GPT5.6 Sol", MiersModelFamily.SOL)
+            model("gpt-5.6-terra", "GPT5.6 Terra", MiersModelFamily.TERRA)
+            model("gpt-5.6-luna", "GPT5.6 Luna", MiersModelFamily.LUNA, STRENGTHS.drop(1))
+            model("gpt-6-astra", "GPT-6 Astra", MiersModelFamily.ASTRA)
+            model("gpt-6-sol", "GPT-6 Sol", MiersModelFamily.SOL)
+            model("gpt-6-luna", "GPT-6 Luna", MiersModelFamily.LUNA, STRENGTHS.drop(1))
+            model("gpt-5.5", "GPT5.5", MiersModelFamily.GPT55, listOf("xhigh", "high"))
+            model("deepseek-v4-flash", "DeepSeek V4 Flash", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
+            model("deepseek-v4-pro", "DeepSeek V4 Pro", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
+            model("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
+            model("dsh-deepseek-v4-flash", "DeepSeek V4 Flash DSH", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
+            model("dsh-deepseek-v4.1-flash", "DeepSeek V4.1 Flash DSH", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
+            model("dsh-deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision DSH", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
         }
         private val EXPECTED_COMBO_BY_KEY: Map<String, ExpectedCombo> =
             EXPECTED_COMBOS.associateBy { comboKey(it.model, it.effort) }
