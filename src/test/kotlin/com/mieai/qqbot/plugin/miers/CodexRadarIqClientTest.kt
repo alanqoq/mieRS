@@ -4,10 +4,13 @@ import com.mieai.qqbot.plugin.api.PluginHttpClient
 import com.mieai.qqbot.plugin.api.PluginHttpRequest
 import com.mieai.qqbot.plugin.api.PluginHttpResponse
 import org.junit.jupiter.api.Test
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletionStage
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -15,226 +18,140 @@ import kotlin.test.assertTrue
 
 class CodexRadarIqClientTest {
     @Test
-    fun `fetch calculates all 29 live IQ values and sends a fresh request every time`() {
-        val http = RecordingHttpClient { jsonResponse(validPayload()) }
-        val client = CodexRadarIqClient(http)
+    fun `fetch reads current public scores with bounded concurrency and skips unscored tiers`() {
+        val http = QueuedHttpClient()
+        val result = CodexRadarIqClient(http).fetch().toCompletableFuture()
 
-        val first = client.fetch().toCompletableFuture().join()
-        val second = client.fetch().toCompletableFuture().join()
+        while (!result.isDone) {
+            awaitCondition { http.pending().isNotEmpty() || result.isDone }
+            http.pending().forEach { pending ->
+                val selection = query(pending.request.uri)
+                val response = if (selection["model"] == "gpt-5.6-luna" && selection["effort"] == "high") {
+                    scorePayload(selection.getValue("model"), selection.getValue("effort"), null, coverage = 0)
+                } else {
+                    scorePayload(
+                        selection.getValue("model"),
+                        selection.getValue("effort"),
+                        if (selection["model"] == "gpt-6-astra" && selection["effort"] == "ultra") 150.0 else 81.75471971832992,
+                    )
+                }
+                http.complete(pending, jsonResponse(response))
+            }
+        }
 
-        assertEquals(29, first.size)
-        assertEquals(first, second)
-        assertEquals("GPT5.6 Sol", first.first().name)
-        assertEquals("ultra", first.first().strength)
-        assertEquals(75.0, first.first().iq)
-        assertEquals(5, first.first().passedTasks)
-        assertEquals(10, first.first().totalTasks)
-        assertEquals("GPT5.6 Luna", first[12].name)
-        assertEquals("max", first[12].strength)
-        val astra = first.filter { it.name == "GPT-6 Astra" }
-        assertEquals(6, astra.size)
-        assertEquals(listOf("ultra", "max", "xhigh", "high", "medium", "low"), astra.map { it.strength })
-        assertTrue(astra.all { it.family == MiersModelFamily.ASTRA })
-        assertEquals("GPT-6 Astra", astra.first().name)
-        assertEquals("GPT5.5", first[23].name)
-        assertEquals("xhigh", first[23].strength)
-        assertEquals("DeepSeek V4 Flash", first[25].name)
-        assertEquals("max", first[25].strength)
-        assertEquals(15.0, first[25].iq)
-        assertEquals("DeepSeek V4 Pro", first[27].name)
-        assertEquals(MiersModelFamily.DEEPSEEK, first[27].family)
-        assertEquals("max", first[27].strength)
-        assertEquals("DeepSeek V4 Pro", first[28].name)
-        assertEquals(MiersModelFamily.DEEPSEEK, first[28].family)
-        assertEquals("high", first[28].strength)
-
+        val models = result.join()
         val requests = http.requests()
-        assertEquals(2, requests.size)
-        requests.forEach { request ->
+        assertEquals(33, models.size)
+        assertEquals(34, requests.size)
+        assertEquals(3, http.maxActive.get())
+        assertEquals(150.0, models.first().iq)
+        assertEquals("GPT-6 Astra", models.first().name)
+        assertEquals("ultra", models.first().strength)
+        assertEquals(64, models.first().coveredTasks)
+        assertEquals(64, models.first().requiredTasks)
+        assertTrue(models.any { it.name == "GPT-6.1 Sol" && it.strength == "low" })
+        assertTrue(models.none { it.name == "GPT-5.6 Luna" && it.strength == "high" })
+
+        val selections = requests.map { request ->
             assertEquals("GET", request.method)
-            assertEquals(CodexRadarIqClient.ENDPOINT, request.uri.toString())
+            assertEquals("api.codexradar.com", request.uri.host)
+            assertEquals("/api/v1/radar-bench-score", request.uri.path)
             assertEquals("application/json", request.headers["Accept"])
             assertEquals("no-cache", request.headers["Cache-Control"])
+            assertEquals("user-selected-v1", request.headers["X-Radar-Bench-Selection"])
             assertEquals(20, request.timeout.seconds)
+            val selection = query(request.uri)
+            assertEquals("summary", selection["view"])
+            "${selection.getValue("model")}/${selection.getValue("effort")}"
         }
+        assertEquals(34, selections.toSet().size)
     }
 
     @Test
-    fun `fetch rejects bad HTTP status and response content type`() {
-        val statusClient = CodexRadarIqClient(
-            RecordingHttpClient { PluginHttpResponse(503, jsonHeaders(), "{}".toByteArray()) },
-        )
-        assertRejected(statusClient, "HTTP 503")
+    fun `fetch keeps scored results when one configuration request fails`() {
+        val http = RecordingHttpClient { request ->
+            val selection = query(request.uri)
+            if (selection["model"] == "gpt-6-astra" && selection["effort"] == "ultra") {
+                PluginHttpResponse(502, jsonHeaders(), "Bad Gateway".toByteArray())
+            } else {
+                jsonResponse(scorePayload(selection.getValue("model"), selection.getValue("effort")))
+            }
+        }
 
-        val contentTypeClient = CodexRadarIqClient(
-            RecordingHttpClient {
-                PluginHttpResponse(200, mapOf("Content-Type" to listOf("text/html")), validPayload().toByteArray())
-            },
-        )
-        assertRejected(contentTypeClient, "content type")
+        val models = CodexRadarIqClient(http).fetch().toCompletableFuture().join()
+
+        assertEquals(33, models.size)
+        assertEquals(34, http.requests().size)
+        assertTrue(models.none { it.name == "GPT-6 Astra" && it.strength == "ultra" })
     }
 
     @Test
-    fun `fetch accepts large and rejects malformed or trailing JSON responses`() {
-        val large = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(validPayload() + " ".repeat(8 * 1024 * 1024 + 1)) },
+    fun `fetch rejects all failed requests and invalid summaries`() {
+        val unavailable = CodexRadarIqClient(
+            RecordingHttpClient { PluginHttpResponse(502, jsonHeaders(), "Bad Gateway".toByteArray()) },
         )
-        assertEquals(29, large.fetch().toCompletableFuture().join().size)
+        assertRejected(unavailable, "HTTP 502")
 
-        val malformed = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse("{not JSON") },
-        )
+        val malformed = CodexRadarIqClient(RecordingHttpClient { jsonResponse("{not JSON") })
         assertRejected(malformed, "JSON is invalid")
 
+        val wrongSelection = CodexRadarIqClient(
+            RecordingHttpClient { jsonResponse(scorePayload("wrong-model", "low")) },
+        )
+        assertRejected(wrongSelection, "does not match")
+
+        val wrongContentType = CodexRadarIqClient(
+            RecordingHttpClient {
+                PluginHttpResponse(200, mapOf("Content-Type" to listOf("text/html")), "{}".toByteArray())
+            },
+        )
+        assertRejected(wrongContentType, "content type")
+    }
+
+    @Test
+    fun `fetch rejects invalid score metadata and trailing JSON`() {
+        val wrongVersion = CodexRadarIqClient(
+            RecordingHttpClient { request ->
+                val selection = query(request.uri)
+                jsonResponse(scorePayload(selection.getValue("model"), selection.getValue("effort"))
+                    .replace("radar-bench-v2-150", "unknown"))
+            },
+        )
+        assertRejected(wrongVersion, "score_version")
+
+        val invalidCoverage = CodexRadarIqClient(
+            RecordingHttpClient { request ->
+                val selection = query(request.uri)
+                jsonResponse(scorePayload(selection.getValue("model"), selection.getValue("effort"), coverage = 65))
+            },
+        )
+        assertRejected(invalidCoverage, "coverage is outside")
+
         val trailing = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(validPayload() + " true") },
+            RecordingHttpClient { request ->
+                val selection = query(request.uri)
+                jsonResponse(scorePayload(selection.getValue("model"), selection.getValue("effort")) + " true")
+            },
         )
         assertRejected(trailing)
     }
 
-    @Test
-    fun `fetch rejects duplicate fields and tables without supported combinations`() {
-        val duplicate = validPayload().replaceFirst("{", "{\"schema\":1,")
-        assertRejected(CodexRadarIqClient(RecordingHttpClient { jsonResponse(duplicate) }), "duplicate fields")
-
-        val unsupported = validPayload(combos = listOf(Combo("unknown-model", "low")))
-        assertRejected(
-            CodexRadarIqClient(RecordingHttpClient { jsonResponse(unsupported) }),
-            "no supported combinations",
-        )
-    }
-
-    @Test
-    fun `fetch tolerates supported combinations removed upstream`() {
-        val models = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(validPayload(combos = SITE_COMBOS)) },
-        ).fetch().toCompletableFuture().join()
-
-        assertEquals(21, models.size)
-        assertTrue(models.none { it.name == "DeepSeek V4 Pro" })
-    }
-
-    @Test
-    fun `fetch recognizes current GPT and DeepSeek combinations and omits missing or invalid tiers`() {
-        val current = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(validPayload(combos = CURRENT_COMBOS)) },
-        ).fetch().toCompletableFuture().join()
-        assertEquals(46, current.size)
-        assertTrue(current.any { it.name == "GPT-6 Sol" })
-        assertTrue(current.any { it.name == "GPT-6 Luna" && it.strength == "low" })
-        assertTrue(current.any { it.name == "DeepSeek V4.1 Flash" })
-        assertTrue(current.any { it.name == "DeepSeek V4 Flash DSH" })
-        assertTrue(current.any { it.name == "DeepSeek V4 Flash Vision DSH" })
-
-        val missing = CURRENT_COMBOS.filterNot { it == Combo("gpt-6-astra", "ultra") }
-        val missingModels = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(validPayload(combos = missing)) },
-        ).fetch().toCompletableFuture().join()
-        assertEquals(45, missingModels.size)
-        assertTrue(missingModels.none { it.name == "GPT-6 Astra" && it.strength == "ultra" })
-
-        val partial = validPayload(combos = CURRENT_COMBOS, noValidSamplesFor = "gpt-6-astra|ultra")
-        val partialModels = CodexRadarIqClient(RecordingHttpClient { jsonResponse(partial) }).fetch().toCompletableFuture().join()
-        assertEquals(45, partialModels.size)
-        assertTrue(partialModels.any { it.name == "GPT-6 Astra" && it.strength == "max" })
-    }
-
-    @Test
-    fun `fetch accepts additional combinations published by CodexRadar`() {
-        val extended = SITE_COMBOS + PRO_COMBOS + listOf(
-            Combo("deepseek-v4-flash", "low"),
-            Combo("deepseek-v4-pro", "low"),
-        )
-
-        val models = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(validPayload(combos = extended)) },
-        ).fetch().toCompletableFuture().join()
-
-        assertEquals(23, models.size)
-    }
-
-    @Test
-    fun `fetch ignores cell payloads for additional combinations`() {
-        val extra = Combo("deepseek-v4-pro", "low")
-        val original = validPayload(combos = SITE_COMBOS + PRO_COMBOS + extra)
-        val extraCell =
-            "\"task-1|${extra.model}|${extra.effort}\":{\"ran_by\":[{\"passed\":true},{\"passed\":true}]}"
-        assertTrue(original.contains(extraCell))
-        val payload = original.replaceFirst(
-            extraCell,
-            "\"task-1|${extra.model}|${extra.effort}\":true",
-        )
-
-        val models = CodexRadarIqClient(
-            RecordingHttpClient { jsonResponse(payload) },
-        ).fetch().toCompletableFuture().join()
-
-        assertEquals(23, models.size)
-    }
-
-    @Test
-    fun `fetch rejects only when no supported combinations have valid samples`() {
-        val partial = validPayload(noValidSamplesFor = "gpt-5.6-sol|low")
-        val retained = CodexRadarIqClient(RecordingHttpClient { jsonResponse(partial) }).fetch().toCompletableFuture().join()
-        assertEquals(28, retained.size)
-        assertTrue(retained.none { it.name == "GPT5.6 Sol" && it.strength == "low" })
-
-        assertRejected(
-            CodexRadarIqClient(RecordingHttpClient { jsonResponse(validPayload(noValidSamplesFor = "*")) }),
-            "no supported combinations",
-        )
-    }
-
-    @Test
-    fun `fetch uses aggregated cell counts and skips zero sample cells`() {
-        val payload = """
-            {"schema":1,"combos":[{"model":"gpt-5.6-sol","effort":"low"},{"model":"gpt-5.6-sol","effort":"medium"}],"tasks":[{"id":"task-1"},{"id":"task-2"}],"cells":{
-              "task-1|gpt-5.6-sol|low":{"total_n":24,"total_p":19,"rate":0.0},
-              "task-2|gpt-5.6-sol|low":{"total_n":0,"total_p":0,"rate":0.0},
-              "task-1|gpt-5.6-sol|medium":{"total_n":8,"total_p":3,"rate":0.375}
-            }}
-        """.trimIndent()
-        val models = CodexRadarIqClient(RecordingHttpClient { jsonResponse(payload) })
-            .fetch().toCompletableFuture().join()
-
-        assertEquals(2, models.size)
-        assertEquals(118.75, models.first { it.strength == "low" }.iq)
-        assertEquals(56.25, models.first { it.strength == "medium" }.iq)
-        assertEquals(19, models.first { it.strength == "low" }.passedTasks)
-        assertEquals(24, models.first { it.strength == "low" }.totalTasks)
-    }
-
     private fun assertRejected(client: CodexRadarIqClient, expectedMessage: String? = null) {
-        val failure = assertFailsWith<CompletionException> {
-            client.fetch().toCompletableFuture().join()
-        }
+        val failure = assertFailsWith<CompletionException> { client.fetch().toCompletableFuture().join() }
         val cause = assertIs<CodexRadarIqException>(failure.cause)
         if (expectedMessage != null) assertTrue(cause.message.orEmpty().contains(expectedMessage))
     }
 
-    private fun validPayload(
-        combos: List<Combo> = SITE_COMBOS + ASTRA_COMBOS + PRO_COMBOS,
-        noValidSamplesFor: String? = null,
-    ): String {
-        val taskIds = (1..TASK_COUNT).map { "task-$it" }
-        val comboJson = combos.joinToString(",") { combo ->
-            "{\"model\":\"${combo.model}\",\"effort\":\"${combo.effort}\"}"
-        }
-        val taskJson = taskIds.joinToString(",") { id -> "{\"id\":\"$id\"}" }
-        val cellsJson = buildList {
-            taskIds.forEach { taskId ->
-                combos.forEachIndexed { comboIndex, combo ->
-                    val key = "${combo.model}|${combo.effort}"
-                    val firstRun = when {
-                        noValidSamplesFor == "*" || key == noValidSamplesFor -> "{}"
-                        taskId.removePrefix("task-").toInt() <= comboIndex % 9 -> "{\"passed\":true}"
-                        else -> "{\"passed\":false}"
-                    }
-                    add("\"$taskId|$key\":{\"ran_by\":[$firstRun,{\"passed\":true}]}")
-                }
-            }
-        }.joinToString(",")
-        return "{\"schema\":1,\"combos\":[$comboJson],\"tasks\":[$taskJson],\"cells\":{$cellsJson}}"
+    private fun query(uri: URI): Map<String, String> = uri.rawQuery.orEmpty().split('&')
+        .associate { part -> part.substringBefore('=') to part.substringAfter('=') }
+
+    private fun scorePayload(model: String, effort: String, score: Double? = 81.75471971832992, coverage: Int = 64): String {
+        val scoreValue = score?.toString() ?: "null"
+        return """
+            {"schema":1,"benchmark":"radar-bench-final64-20261004","score_version":"radar-bench-v2-150",
+             "score_max":150.0,"model":"$model","effort":"$effort","harness":"codex",
+             "score":$scoreValue,"coverage":$coverage,"required_tasks":64,"score_status":"complete"}
+        """.trimIndent()
     }
 
     private fun jsonResponse(content: String): PluginHttpResponse =
@@ -243,15 +160,46 @@ class CodexRadarIqClientTest {
     private fun jsonHeaders(): Map<String, List<String>> =
         mapOf("content-type" to listOf("application/json; charset=utf-8"))
 
+    private fun awaitCondition(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!condition() && System.nanoTime() < deadline) Thread.sleep(5)
+        assertTrue(condition(), "condition did not become true")
+    }
+
+    private data class PendingRequest(
+        val request: PluginHttpRequest,
+        val response: CompletableFuture<PluginHttpResponse>,
+    )
+
+    private class QueuedHttpClient : PluginHttpClient {
+        private val pending = mutableListOf<PendingRequest>()
+        private val active = AtomicInteger()
+        val maxActive = AtomicInteger()
+
+        override fun send(request: PluginHttpRequest): CompletionStage<PluginHttpResponse> {
+            val response = CompletableFuture<PluginHttpResponse>()
+            val count = active.incrementAndGet()
+            maxActive.updateAndGet { current -> maxOf(current, count) }
+            synchronized(pending) { pending += PendingRequest(request, response) }
+            return response
+        }
+
+        fun complete(pendingRequest: PendingRequest, response: PluginHttpResponse) {
+            active.decrementAndGet()
+            pendingRequest.response.complete(response)
+        }
+
+        fun pending(): List<PendingRequest> = synchronized(pending) { pending.filterNot { it.response.isDone } }
+        fun requests(): List<PluginHttpRequest> = synchronized(pending) { pending.map(PendingRequest::request) }
+    }
+
     private class RecordingHttpClient(
         private val responder: (PluginHttpRequest) -> PluginHttpResponse,
     ) : PluginHttpClient {
         private val requests = mutableListOf<PluginHttpRequest>()
 
         override fun send(request: PluginHttpRequest): CompletionStage<PluginHttpResponse> {
-            synchronized(requests) {
-                requests += request
-            }
+            synchronized(requests) { requests += request }
             return try {
                 CompletableFuture.completedFuture(responder(request))
             } catch (failure: RuntimeException) {
@@ -260,73 +208,5 @@ class CodexRadarIqClientTest {
         }
 
         fun requests(): List<PluginHttpRequest> = synchronized(requests) { requests.toList() }
-    }
-
-    private data class Combo(
-        val model: String,
-        val effort: String,
-    )
-
-    private companion object {
-        const val TASK_COUNT = 10
-
-        val SITE_COMBOS = listOf(
-            Combo("gpt-5.6-sol", "low"),
-            Combo("gpt-5.6-sol", "medium"),
-            Combo("gpt-5.6-sol", "high"),
-            Combo("gpt-5.6-sol", "xhigh"),
-            Combo("gpt-5.6-sol", "max"),
-            Combo("gpt-5.6-sol", "ultra"),
-            Combo("gpt-5.6-terra", "low"),
-            Combo("gpt-5.6-terra", "medium"),
-            Combo("gpt-5.6-terra", "high"),
-            Combo("gpt-5.6-terra", "xhigh"),
-            Combo("gpt-5.6-terra", "max"),
-            Combo("gpt-5.6-terra", "ultra"),
-            Combo("gpt-5.6-luna", "low"),
-            Combo("gpt-5.6-luna", "medium"),
-            Combo("gpt-5.6-luna", "high"),
-            Combo("gpt-5.6-luna", "xhigh"),
-            Combo("gpt-5.6-luna", "max"),
-            Combo("gpt-5.5", "high"),
-            Combo("gpt-5.5", "xhigh"),
-            Combo("deepseek-v4-flash", "max"),
-            Combo("deepseek-v4-flash", "high"),
-        )
-
-        val PRO_COMBOS = listOf(
-            Combo("deepseek-v4-pro", "max"),
-            Combo("deepseek-v4-pro", "high"),
-        )
-
-        val ASTRA_COMBOS = listOf(
-            Combo("gpt-6-astra", "low"),
-            Combo("gpt-6-astra", "medium"),
-            Combo("gpt-6-astra", "high"),
-            Combo("gpt-6-astra", "xhigh"),
-            Combo("gpt-6-astra", "max"),
-            Combo("gpt-6-astra", "ultra"),
-        )
-
-        val CURRENT_COMBOS = listOf(
-            Combo("gpt-5.6-sol", "low"), Combo("gpt-5.6-sol", "medium"), Combo("gpt-5.6-sol", "high"),
-            Combo("gpt-5.6-sol", "xhigh"), Combo("gpt-5.6-sol", "max"), Combo("gpt-5.6-sol", "ultra"),
-            Combo("gpt-5.6-terra", "low"), Combo("gpt-5.6-terra", "medium"), Combo("gpt-5.6-terra", "high"),
-            Combo("gpt-5.6-terra", "xhigh"), Combo("gpt-5.6-terra", "max"), Combo("gpt-5.6-terra", "ultra"),
-            Combo("gpt-5.6-luna", "low"), Combo("gpt-5.6-luna", "medium"), Combo("gpt-5.6-luna", "high"),
-            Combo("gpt-5.6-luna", "xhigh"), Combo("gpt-5.6-luna", "max"),
-            Combo("gpt-6-astra", "low"), Combo("gpt-6-astra", "medium"), Combo("gpt-6-astra", "high"),
-            Combo("gpt-6-astra", "xhigh"), Combo("gpt-6-astra", "max"), Combo("gpt-6-astra", "ultra"),
-            Combo("gpt-6-sol", "low"), Combo("gpt-6-sol", "medium"), Combo("gpt-6-sol", "high"),
-            Combo("gpt-6-sol", "xhigh"), Combo("gpt-6-sol", "max"), Combo("gpt-6-sol", "ultra"),
-            Combo("gpt-6-luna", "low"), Combo("gpt-6-luna", "medium"), Combo("gpt-6-luna", "high"),
-            Combo("gpt-6-luna", "xhigh"), Combo("gpt-6-luna", "max"),
-            Combo("gpt-5.5", "high"), Combo("gpt-5.5", "xhigh"),
-            Combo("deepseek-v4-flash", "max"), Combo("deepseek-v4-flash", "high"),
-            Combo("deepseek-v4.1-flash", "max"), Combo("deepseek-v4.1-flash", "high"),
-            Combo("dsh-deepseek-v4-flash", "max"), Combo("dsh-deepseek-v4-flash", "high"),
-            Combo("dsh-deepseek-v4.1-flash", "max"), Combo("dsh-deepseek-v4.1-flash", "high"),
-            Combo("dsh-deepseek-v4-flash-vision-exp", "max"), Combo("dsh-deepseek-v4-flash-vision-exp", "high"),
-        )
     }
 }

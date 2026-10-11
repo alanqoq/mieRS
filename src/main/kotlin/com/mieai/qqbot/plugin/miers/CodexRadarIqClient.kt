@@ -17,20 +17,40 @@ import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.ExecutionException
 
-private fun comboKey(model: String, effort: String): String = "$model|$effort"
-
-/** Loads and validates the available preferred IQ tiers from CodexRadar. */
+/** Loads and validates CodexRadar's public per-configuration RadarBench scores. */
 class CodexRadarIqClient(
     private val httpClient: PluginHttpClient,
 ) {
-    /** Starts one uncached request and completes without blocking the caller. */
-    fun fetch(): CompletionStage<List<MiersIqModel>> {
+    /** Starts uncached reads and completes without blocking the caller. */
+    fun fetch(): CompletionStage<List<MiersIqModel>> =
+        fetchBatches(EXPECTED_COMBOS.chunked(MAX_CONCURRENCY), emptyList()).thenApply { results ->
+            val models = results.mapNotNull(ComboReadResult::model)
+            if (models.isEmpty()) {
+                throw results.firstNotNullOfOrNull(ComboReadResult::failure)
+                    ?: CodexRadarIqException("CodexRadar returned no scored configurations")
+            }
+            models
+        }
+
+    private fun fetchBatches(
+        batches: List<List<ExpectedCombo>>,
+        completed: List<ComboReadResult>,
+    ): CompletionStage<List<ComboReadResult>> {
+        if (batches.isEmpty()) return CompletableFuture.completedFuture(completed)
+        val current = batches.first().map(::fetchCombo).map(CompletionStage<ComboReadResult>::toCompletableFuture)
+        return CompletableFuture.allOf(*current.toTypedArray()).thenCompose {
+            fetchBatches(batches.drop(1), completed + current.map(CompletableFuture<ComboReadResult>::join))
+        }
+    }
+
+    private fun fetchCombo(combo: ExpectedCombo): CompletionStage<ComboReadResult> {
         val request = PluginHttpRequest(
             method = "GET",
-            uri = URI.create(ENDPOINT),
+            uri = URI.create("$ENDPOINT?model=${combo.model}&effort=${combo.effort}&view=summary"),
             headers = mapOf(
                 "Accept" to "application/json",
                 "Cache-Control" to "no-cache",
+                "X-Radar-Bench-Selection" to "user-selected-v1",
             ),
             timeout = REQUEST_TIMEOUT,
         )
@@ -38,24 +58,37 @@ class CodexRadarIqClient(
         val responseStage = try {
             httpClient.send(request).also { requireNotNull(it) { "CodexRadar HTTP client returned no stage" } }
         } catch (failure: Exception) {
-            return CompletableFuture.failedFuture(
-                CodexRadarIqException("CodexRadar IQ request could not be started", failure),
+            return CompletableFuture.completedFuture(
+                ComboReadResult(null, CodexRadarIqException("CodexRadar IQ request could not be started", failure)),
             )
         }
 
-        return responseStage
-            .handle { response, failure ->
-                if (failure != null) {
+        return responseStage.handle { response, failure ->
+            when {
+                failure != null -> {
                     val cause = unwrapCompletionFailure(failure)
-                    if (cause is CodexRadarIqException) throw cause
-                    throw CodexRadarIqException("CodexRadar IQ request failed", cause)
+                    val requestFailure = cause as? CodexRadarIqException
+                        ?: CodexRadarIqException("CodexRadar IQ request failed for ${combo.model}/${combo.effort}", cause)
+                    ComboReadResult(null, requestFailure)
                 }
-                response ?: throw CodexRadarIqException("CodexRadar IQ request returned no response")
+
+                response == null -> ComboReadResult(
+                    null,
+                    CodexRadarIqException("CodexRadar IQ request returned no response for ${combo.model}/${combo.effort}"),
+                )
+
+                else -> try {
+                    ComboReadResult(parseResponse(response, combo), null)
+                } catch (requestFailure: CodexRadarIqException) {
+                    ComboReadResult(null, requestFailure)
+                } catch (_: Exception) {
+                    ComboReadResult(null, CodexRadarIqException("CodexRadar IQ response JSON is invalid"))
+                }
             }
-            .thenApply(::parseResponse)
+        }
     }
 
-    private fun parseResponse(response: PluginHttpResponse): List<MiersIqModel> {
+    private fun parseResponse(response: PluginHttpResponse, expected: ExpectedCombo): MiersIqModel? {
         if (response.statusCode != HTTP_OK) {
             throw CodexRadarIqException("CodexRadar IQ request returned HTTP ${response.statusCode}")
         }
@@ -63,251 +96,94 @@ class CodexRadarIqClient(
             throw CodexRadarIqException("CodexRadar IQ response content type is not application/json")
         }
 
-        val body = response.body
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
         return try {
-            parseBody(body)
+            InputStreamReader(ByteArrayInputStream(response.body), decoder).use { input ->
+                JsonReader(input).use { reader ->
+                    reader.strictness = Strictness.STRICT
+                    val model = readSummary(reader, expected)
+                    if (reader.peek() != JsonToken.END_DOCUMENT) invalid("JSON contains trailing data")
+                    model
+                }
+            }
         } catch (failure: CodexRadarIqException) {
             throw failure
         } catch (_: Exception) {
-            // Do not retain or expose parser messages that might contain response text.
             throw CodexRadarIqException("CodexRadar IQ response JSON is invalid")
         }
     }
 
-    private fun parseBody(body: ByteArray): List<MiersIqModel> {
-        val decoder = StandardCharsets.UTF_8.newDecoder()
-            .onMalformedInput(CodingErrorAction.REPORT)
-            .onUnmappableCharacter(CodingErrorAction.REPORT)
-        return InputStreamReader(ByteArrayInputStream(body), decoder).use { input ->
-            JsonReader(input).use { reader ->
-                reader.strictness = Strictness.STRICT
-                val payload = readPayload(reader)
-                if (reader.peek() != JsonToken.END_DOCUMENT) {
-                    invalid("JSON contains trailing data")
-                }
-                buildModels(payload.combos, payload.taskIds, payload.cells)
-            }
-        }
-    }
-
-    private fun readPayload(reader: JsonReader): ParsedPayload {
+    private fun readSummary(reader: JsonReader, expected: ExpectedCombo): MiersIqModel? {
         if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("top-level JSON value must be an object")
         reader.beginObject()
 
         val fields = HashSet<String>()
         var schema: Int? = null
-        var combos: Set<String>? = null
-        var taskIds: List<String>? = null
-        var cells: Map<String, CellStats?>? = null
+        var scoreVersion: String? = null
+        var scoreMax: Double? = null
+        var model: String? = null
+        var effort: String? = null
+        var score: Double? = null
+        var scoreFieldSeen = false
+        var coverage: Int? = null
+        var requiredTasks: Int? = null
         while (reader.hasNext()) {
             val name = reader.nextName()
-            if (!fields.add(name)) invalid("top-level JSON contains duplicate fields")
+            if (!fields.add(name)) invalid("summary contains duplicate fields")
             when (name) {
                 "schema" -> {
                     if (reader.peek() != JsonToken.NUMBER) invalid("schema must be the number 1")
                     schema = reader.nextInt()
                 }
 
-                "combos" -> combos = readCombos(reader)
-                "tasks" -> taskIds = readTasks(reader)
-                "cells" -> cells = readCells(reader)
+                "score_version" -> scoreVersion = readString(reader, "score_version")
+                "score_max" -> scoreMax = readFiniteDouble(reader, "score_max")
+                "model" -> model = readString(reader, "model")
+                "effort" -> effort = readString(reader, "effort")
+                "score" -> {
+                    scoreFieldSeen = true
+                    score = if (reader.peek() == JsonToken.NULL) {
+                        reader.nextNull()
+                        null
+                    } else {
+                        readFiniteDouble(reader, "score")
+                    }
+                }
+
+                "coverage" -> coverage = readNonNegativeInt(reader, "coverage")
+                "required_tasks" -> requiredTasks = readNonNegativeInt(reader, "required_tasks")
                 else -> reader.skipValue()
             }
         }
         reader.endObject()
 
         if (schema != SCHEMA_VERSION) invalid("schema must be 1")
-        val verifiedCombos = combos ?: invalid("combos is required")
-        if (verifiedCombos.isEmpty()) invalid("combos must not be empty")
-        val verifiedTasks = taskIds ?: invalid("tasks is required")
-        if (verifiedTasks.isEmpty()) invalid("tasks must not be empty")
-        val verifiedCells = cells ?: invalid("cells is required")
+        if (scoreVersion != SCORE_VERSION) invalid("score_version is unsupported")
+        if (scoreMax != IQ_MAX) invalid("score_max is unsupported")
+        if (model != expected.model || effort != expected.effort) invalid("score selection does not match the request")
+        if (!scoreFieldSeen) invalid("score is missing")
 
-        val taskSet = verifiedTasks.toHashSet()
-        verifiedCells.keys.forEach { key ->
-            val taskId = parseCellKey(key).first
-            if (taskId !in taskSet) invalid("cells contain an unknown task")
+        val verifiedCoverage = coverage ?: invalid("coverage is missing")
+        val verifiedRequiredTasks = requiredTasks ?: invalid("required_tasks is missing")
+        if (verifiedRequiredTasks == 0 || verifiedCoverage > verifiedRequiredTasks) {
+            invalid("coverage is outside the required task range")
         }
-        return ParsedPayload(verifiedCombos, verifiedTasks, verifiedCells)
-    }
+        if (score == null) {
+            if (verifiedCoverage != 0) invalid("score is missing despite available coverage")
+            return null
+        }
+        if (verifiedCoverage == 0 || score !in IQ_MIN..IQ_MAX) invalid("score is outside the supported range")
 
-    private fun readCombos(reader: JsonReader): Set<String> {
-        if (reader.peek() != JsonToken.BEGIN_ARRAY) invalid("combos must be an array")
-        val seen = LinkedHashSet<String>()
-        reader.beginArray()
-        while (reader.hasNext()) {
-            val combo = readCombo(reader)
-            val key = comboKey(combo.model, combo.effort)
-            if (!seen.add(key)) invalid("combos contain a duplicate combination")
-        }
-        reader.endArray()
-        return seen
-    }
-
-    private fun readCombo(reader: JsonReader): ComboFields {
-        if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("each combo must be an object")
-        reader.beginObject()
-        val fields = HashSet<String>()
-        var model: String? = null
-        var effort: String? = null
-        while (reader.hasNext()) {
-            val name = reader.nextName()
-            if (!fields.add(name)) invalid("combo objects contain duplicate fields")
-            when (name) {
-                "model" -> model = readString(reader, "combo model")
-                "effort" -> effort = readString(reader, "combo effort")
-                else -> reader.skipValue()
-            }
-        }
-        reader.endObject()
-        return ComboFields(
-            model ?: invalid("combo model is missing"),
-            effort ?: invalid("combo effort is missing"),
+        return MiersIqModel(
+            name = expected.name,
+            iq = score,
+            family = expected.family,
+            strength = expected.effort,
+            coveredTasks = verifiedCoverage,
+            requiredTasks = verifiedRequiredTasks,
         )
-    }
-
-    private fun readTasks(reader: JsonReader): List<String> {
-        if (reader.peek() != JsonToken.BEGIN_ARRAY) invalid("tasks must be an array")
-        val seen = HashSet<String>()
-        val taskIds = ArrayList<String>()
-        reader.beginArray()
-        while (reader.hasNext()) {
-            if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("each task must be an object")
-            reader.beginObject()
-            val fields = HashSet<String>()
-            var id: String? = null
-            while (reader.hasNext()) {
-                val name = reader.nextName()
-                if (!fields.add(name)) invalid("task objects contain duplicate fields")
-                when (name) {
-                    "id" -> id = readString(reader, "task id")
-                    else -> reader.skipValue()
-                }
-            }
-            reader.endObject()
-
-            val taskId = id ?: invalid("task id is missing")
-            if (taskId.isBlank() || '|' in taskId) invalid("task id is invalid")
-            if (!seen.add(taskId)) invalid("tasks contain duplicate IDs")
-            taskIds += taskId
-        }
-        reader.endArray()
-        return taskIds
-    }
-
-    private fun readCells(reader: JsonReader): Map<String, CellStats?> {
-        if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("cells must be an object")
-        val seen = HashSet<String>()
-        val cells = HashMap<String, CellStats?>()
-        reader.beginObject()
-        while (reader.hasNext()) {
-            val key = reader.nextName()
-            if (!seen.add(key)) invalid("cells contain a duplicate key")
-            val combo = parseCellKey(key).second
-            if (combo in EXPECTED_COMBO_BY_KEY) {
-                cells[key] = readCell(reader)
-            } else {
-                reader.skipValue()
-            }
-        }
-        reader.endObject()
-        return cells
-    }
-
-    private fun readCell(reader: JsonReader): CellStats? {
-        if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("each cell must be an object")
-        reader.beginObject()
-        val fields = HashSet<String>()
-        var firstPassed: Boolean? = null
-        var totalN: Int? = null
-        var totalP: Int? = null
-        while (reader.hasNext()) {
-            val name = reader.nextName()
-            if (!fields.add(name)) invalid("cell objects contain duplicate fields")
-            when (name) {
-                "ran_by" -> firstPassed = readRanBy(reader)
-                "total_n" -> totalN = readNonNegativeInt(reader, "cell total_n")
-                "total_p" -> totalP = readNonNegativeInt(reader, "cell total_p")
-                "rate" -> reader.skipValue()
-                else -> reader.skipValue()
-            }
-        }
-        reader.endObject()
-        if (totalN != null || totalP != null) {
-            val n = totalN ?: invalid("cell total_n is missing")
-            val p = totalP ?: invalid("cell total_p is missing")
-            if (p > n) invalid("cell total_p exceeds total_n")
-            return if (n == 0) null else CellStats(p, n)
-        }
-        return firstPassed?.let { passed -> CellStats(if (passed) 1 else 0, 1) }
-    }
-
-    private fun readRanBy(reader: JsonReader): Boolean? {
-        if (reader.peek() != JsonToken.BEGIN_ARRAY) invalid("ran_by must be an array")
-        reader.beginArray()
-        var index = 0
-        var firstPassed: Boolean? = null
-        while (reader.hasNext()) {
-            if (reader.peek() != JsonToken.BEGIN_OBJECT) invalid("ran_by entries must be objects")
-            val passed = readRun(reader)
-            if (index == 0) firstPassed = passed
-            index++
-        }
-        reader.endArray()
-        return firstPassed
-    }
-
-    private fun readRun(reader: JsonReader): Boolean? {
-        reader.beginObject()
-        val fields = HashSet<String>()
-        var passed: Boolean? = null
-        while (reader.hasNext()) {
-            val name = reader.nextName()
-            if (!fields.add(name)) invalid("ran_by entries contain duplicate fields")
-            if (name == "passed") {
-                passed = if (reader.peek() == JsonToken.BOOLEAN) reader.nextBoolean() else {
-                    reader.skipValue()
-                    null
-                }
-            } else {
-                reader.skipValue()
-            }
-        }
-        reader.endObject()
-        return passed
-    }
-
-    private fun buildModels(
-        combos: Set<String>,
-        taskIds: List<String>,
-        cells: Map<String, CellStats?>,
-    ): List<MiersIqModel> {
-        val models = EXPECTED_COMBOS.mapNotNull { combo ->
-            val key = comboKey(combo.model, combo.effort)
-            if (key !in combos) return@mapNotNull null
-
-            var validTasks = 0
-            var passedTasks = 0
-            taskIds.forEach { taskId ->
-                val stats = cells["$taskId|${combo.model}|${combo.effort}"] ?: return@forEach
-                validTasks += stats.total
-                passedTasks += stats.passed
-            }
-            if (validTasks == 0) return@mapNotNull null
-
-            val iq = passedTasks.toDouble() / validTasks.toDouble() * IQ_MULTIPLIER
-            if (!iq.isFinite() || iq !in IQ_MIN..IQ_MAX) invalid("computed IQ is outside the supported range")
-            MiersIqModel(
-                name = combo.name,
-                iq = iq,
-                family = combo.family,
-                strength = combo.effort,
-                passedTasks = passedTasks,
-                totalTasks = validTasks,
-            )
-        }
-        if (models.isEmpty()) invalid("no supported combinations have valid samples")
-        return models
     }
 
     private fun readString(reader: JsonReader, field: String): String {
@@ -326,16 +202,15 @@ class CodexRadarIqClient(
         return value
     }
 
-    private fun parseCellKey(key: String): Pair<String, String> {
-        val firstSeparator = key.indexOf('|')
-        val secondSeparator = key.indexOf('|', firstSeparator + 1)
-        if (firstSeparator <= 0 || secondSeparator <= firstSeparator + 1 || secondSeparator >= key.lastIndex) {
-            invalid("cell key has an invalid shape")
+    private fun readFiniteDouble(reader: JsonReader, field: String): Double {
+        if (reader.peek() != JsonToken.NUMBER) invalid("$field must be a finite number")
+        val value = try {
+            reader.nextDouble()
+        } catch (_: Exception) {
+            invalid("$field must be a finite number")
         }
-        if (key.indexOf('|', secondSeparator + 1) >= 0) invalid("cell key has an invalid shape")
-        val taskId = key.substring(0, firstSeparator)
-        val combo = key.substring(firstSeparator + 1)
-        return taskId to combo
+        if (!value.isFinite()) invalid("$field must be a finite number")
+        return value
     }
 
     private fun hasJsonContentType(headers: Map<String, List<String>>): Boolean {
@@ -358,17 +233,9 @@ class CodexRadarIqClient(
     private fun invalid(detail: String): Nothing =
         throw CodexRadarIqException("CodexRadar IQ response is invalid: $detail")
 
-    private data class ParsedPayload(
-        val combos: Set<String>,
-        val taskIds: List<String>,
-        val cells: Map<String, CellStats?>,
-    )
-
-    private data class CellStats(val passed: Int, val total: Int)
-
-    private data class ComboFields(
-        val model: String,
-        val effort: String,
+    private data class ComboReadResult(
+        val model: MiersIqModel?,
+        val failure: CodexRadarIqException?,
     )
 
     private data class ExpectedCombo(
@@ -379,13 +246,14 @@ class CodexRadarIqClient(
     )
 
     companion object {
-        const val ENDPOINT: String = "https://codexradar.com/api/intelligence-efficiency?refresh=1"
+        const val ENDPOINT: String = "https://api.codexradar.com/api/v1/radar-bench-score"
 
         private const val HTTP_OK = 200
         private const val SCHEMA_VERSION = 1
-        private const val IQ_MULTIPLIER = 150.0
+        private const val SCORE_VERSION = "radar-bench-v2-150"
         private const val IQ_MIN = 0.0
-        private const val IQ_MAX = 120.0
+        private const val IQ_MAX = 150.0
+        private const val MAX_CONCURRENCY = 3
         private val REQUEST_TIMEOUT: Duration = Duration.ofSeconds(20)
 
         private val STRENGTHS = listOf("ultra", "max", "xhigh", "high", "medium", "low")
@@ -393,22 +261,14 @@ class CodexRadarIqClient(
             fun model(id: String, name: String, family: MiersModelFamily, efforts: List<String> = STRENGTHS) {
                 addAll(efforts.map { effort -> ExpectedCombo(id, effort, name, family) })
             }
-            model("gpt-5.6-sol", "GPT5.6 Sol", MiersModelFamily.SOL)
-            model("gpt-5.6-terra", "GPT5.6 Terra", MiersModelFamily.TERRA)
-            model("gpt-5.6-luna", "GPT5.6 Luna", MiersModelFamily.LUNA, STRENGTHS.drop(1))
+
             model("gpt-6-astra", "GPT-6 Astra", MiersModelFamily.ASTRA)
+            model("gpt-6.1-sol", "GPT-6.1 Sol", MiersModelFamily.SOL)
             model("gpt-6-sol", "GPT-6 Sol", MiersModelFamily.SOL)
+            model("gpt-5.6-sol", "GPT-5.6 Sol", MiersModelFamily.SOL)
             model("gpt-6-luna", "GPT-6 Luna", MiersModelFamily.LUNA, STRENGTHS.drop(1))
-            model("gpt-5.5", "GPT5.5", MiersModelFamily.GPT55, listOf("xhigh", "high"))
-            model("deepseek-v4-flash", "DeepSeek V4 Flash", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
-            model("deepseek-v4-pro", "DeepSeek V4 Pro", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
-            model("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
-            model("dsh-deepseek-v4-flash", "DeepSeek V4 Flash DSH", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
-            model("dsh-deepseek-v4.1-flash", "DeepSeek V4.1 Flash DSH", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
-            model("dsh-deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision DSH", MiersModelFamily.DEEPSEEK, listOf("max", "high"))
+            model("gpt-5.6-luna", "GPT-5.6 Luna", MiersModelFamily.LUNA, STRENGTHS.drop(1))
         }
-        private val EXPECTED_COMBO_BY_KEY: Map<String, ExpectedCombo> =
-            EXPECTED_COMBOS.associateBy { comboKey(it.model, it.effort) }
     }
 }
 

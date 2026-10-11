@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.mieai.qqbot.plugin"
-version = providers.gradleProperty("pluginVersion").orElse("0.0.10").get()
+version = providers.gradleProperty("pluginVersion").orElse("0.0.11").get()
 
 java {
     toolchain {

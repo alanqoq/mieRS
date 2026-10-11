@@ -21,15 +21,15 @@ data class MiersIqModel(
     val iq: Double,
     val family: MiersModelFamily,
     val strength: String,
-    val passedTasks: Int = 0,
-    val totalTasks: Int = 0,
+    val coveredTasks: Int = 0,
+    val requiredTasks: Int = 0,
 ) {
     init {
         require(name.isNotBlank()) { "name must not be blank" }
         require(iq in 0.0..MiersIqImageRenderer.IQ_SCALE_MAX) { "iq must be within the image scale" }
         require(strength in STRENGTHS) { "strength is unsupported" }
-        require(totalTasks >= 0) { "totalTasks must not be negative" }
-        require(passedTasks in 0..totalTasks) { "passedTasks must be within totalTasks" }
+        require(requiredTasks >= 0) { "requiredTasks must not be negative" }
+        require(coveredTasks in 0..requiredTasks) { "coveredTasks must be within requiredTasks" }
     }
 
     companion object {
@@ -121,10 +121,10 @@ class MiersIqImageRenderer(
             val average = entries.map(MiersIqModel::iq).average()
             drawText(graphics, "AVG", cardMetaFont, MUTED, x + CARD_PADDING, y + 54)
             drawText(graphics, formatIq(average), averageFont, accent, x + CARD_PADDING + 42, y + 56)
-            val passed = entries.sumOf(MiersIqModel::passedTasks)
-            val total = entries.sumOf(MiersIqModel::totalTasks)
-            if (total > 0) {
-                drawText(graphics, "$passed/$total PASSED", cardMetaFont, MUTED, x + CARD_WIDTH - CARD_PADDING, y + 54, alignRight = true)
+            val covered = entries.sumOf(MiersIqModel::coveredTasks)
+            val required = entries.sumOf(MiersIqModel::requiredTasks)
+            if (required > 0) {
+                drawText(graphics, "$covered/$required COVERED", cardMetaFont, MUTED, x + CARD_WIDTH - CARD_PADDING, y + 54, alignRight = true)
             }
             val strengths = entries.sortedBy { STRENGTH_ORDER.indexOf(it.strength) }
             strengths.forEachIndexed { cellIndex, model ->
@@ -139,8 +139,8 @@ class MiersIqImageRenderer(
                 graphics.drawRoundRect(cellX, cellY, CARD_CELL_WIDTH, CARD_CELL_HEIGHT, CARD_CELL_RADIUS, CARD_CELL_RADIUS)
                 drawText(graphics, model.strength.uppercase(Locale.ROOT), cellLabelFont, accent, cellX + 8, cellY + 17)
                 drawText(graphics, formatIq(model.iq), cellValueFont, accent, cellX + 8, cellY + 41)
-                if (model.totalTasks > 0) {
-                    drawText(graphics, "${model.passedTasks}/${model.totalTasks}", cellMetaFont, MUTED, cellX + CARD_CELL_WIDTH - 7, cellY + 59, alignRight = true)
+                if (model.requiredTasks > 0) {
+                    drawText(graphics, "${model.coveredTasks}/${model.requiredTasks}", cellMetaFont, MUTED, cellX + CARD_CELL_WIDTH - 7, cellY + 59, alignRight = true)
                 }
             }
         }
@@ -196,7 +196,7 @@ class MiersIqImageRenderer(
         graphics.color = BORDER
         graphics.stroke = BasicStroke(1f)
         graphics.drawLine(GRID_MARGIN_X, footerY, WIDTH - GRID_MARGIN_X, footerY)
-        drawText(graphics, "IQ 参考尺度 0-120", metaFont, MUTED, GRID_MARGIN_X, footerY + 33)
+        drawText(graphics, "IQ 参考尺度 0-150", metaFont, MUTED, GRID_MARGIN_X, footerY + 33)
         drawText(graphics, "来源 codexradar.com | 实时抓取", metaFont, MUTED, WIDTH - GRID_MARGIN_X, footerY + 33, alignRight = true)
     }
 
@@ -291,8 +291,8 @@ class MiersIqImageRenderer(
     companion object {
         const val WIDTH: Int = 1210
         const val HEIGHT: Int = 1750
-        const val MODEL_COUNT: Int = 29
-        const val IQ_SCALE_MAX: Double = 120.0
+        const val MODEL_COUNT: Int = 33
+        const val IQ_SCALE_MAX: Double = 150.0
 
         private const val GRID_COLUMNS = 5
         private const val GRID_MARGIN_X = 24
@@ -322,7 +322,7 @@ class MiersIqImageRenderer(
         private const val FOOTER_Y = 1640
         private const val FOOTER_GAP = 72
 
-        private val TICKS = listOf(0, 20, 40, 60, 80, 100, 120)
+        private val TICKS = listOf(0, 25, 50, 75, 100, 125, 150)
         private val FETCHED_AT_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT)
         private val BACKGROUND = color("#0D1117")
         private val SURFACE = color("#161B22")
@@ -345,7 +345,7 @@ class MiersIqImageRenderer(
         private val unitFont = Font("Segoe UI", Font.PLAIN, 13)
         private val rankScoreFont = Font("Segoe UI", Font.BOLD, 20)
         private val STRENGTH_ORDER = listOf("ultra", "max", "xhigh", "high", "medium", "low")
-        private val MODEL_ORDER = listOf("GPT5.6 Sol", "GPT5.6 Terra", "GPT5.6 Luna", "GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "GPT5.5", "DeepSeek V4 Flash", "DeepSeek V4 Pro", "DeepSeek V4.1 Flash", "DeepSeek V4 Flash DSH", "DeepSeek V4.1 Flash DSH", "DeepSeek V4 Flash Vision DSH")
+        private val MODEL_ORDER = listOf("GPT-6 Astra", "GPT-6.1 Sol", "GPT-6 Sol", "GPT-5.6 Sol", "GPT-6 Luna", "GPT-5.6 Luna")
 
         private fun color(hex: String): Color = Color(Integer.parseInt(hex.removePrefix("#"), 16))
     }

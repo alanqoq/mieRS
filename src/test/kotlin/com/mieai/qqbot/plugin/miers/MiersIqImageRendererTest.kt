@@ -13,15 +13,15 @@ import kotlin.test.assertTrue
 
 class MiersIqImageRendererTest {
     @Test
-    fun `live model table has 29 models and ranking preserves stable ties`() {
+    fun `live model table has 33 scored configurations and ranking preserves stable ties`() {
         val models = testModels()
-        assertEquals(29, models.size)
+        assertEquals(33, models.size)
 
         val ranked = models.withIndex()
             .sortedWith(compareByDescending<IndexedValue<MiersIqModel>> { it.value.iq }.thenBy { it.index })
             .map(IndexedValue<MiersIqModel>::value)
-        assertEquals(29, ranked.size)
-        assertEquals("GPT5.6 Sol", ranked.first().name)
+        assertEquals(33, ranked.size)
+        assertEquals("GPT-5.6 Sol", ranked.first().name)
         assertEquals("max", ranked.first().strength)
         assertEquals(105.8, ranked.first().iq)
         assertEquals("GPT-6 Astra", ranked.last().name)
@@ -33,21 +33,21 @@ class MiersIqImageRendererTest {
             ranked.filter { it.iq == 104.5 }.map(MiersIqModel::strength),
         )
         assertEquals(
-            listOf("xhigh", "high"),
+            listOf("xhigh", "max"),
             ranked.filter { it.iq == 84.4 }.map(MiersIqModel::strength),
         )
         assertTrue(ranked.zipWithNext().all { (left, right) -> left.iq >= right.iq })
     }
 
     @Test
-    fun `first module groups seven models and exposes averages`() {
+    fun `model cards follow the live site order and expose averages`() {
         val models = testModels()
         val grouped = models.groupBy(MiersIqModel::name)
-        val displayed = listOf("GPT5.6 Sol", "GPT5.6 Terra", "GPT5.6 Luna", "GPT-6 Astra", "GPT5.5", "DeepSeek V4 Flash", "DeepSeek V4 Pro")
+        val displayed = listOf("GPT-6 Astra", "GPT-6.1 Sol", "GPT-6 Sol", "GPT-5.6 Sol", "GPT-6 Luna", "GPT-5.6 Luna")
         assertEquals(displayed, grouped.keys.toList())
-        assertEquals(listOf("ultra", "max", "xhigh", "high", "medium", "low"), grouped.getValue("GPT5.6 Sol").map(MiersIqModel::strength))
-        assertEquals(93.5333333333, grouped.getValue("GPT5.6 Sol").map(MiersIqModel::iq).average(), 0.0001)
-        assertEquals(59.44, grouped.getValue("GPT5.6 Luna").map(MiersIqModel::iq).average(), 0.0001)
+        assertEquals(listOf("ultra", "max", "xhigh", "high", "medium", "low"), grouped.getValue("GPT-5.6 Sol").map(MiersIqModel::strength))
+        assertEquals(93.5333333333, grouped.getValue("GPT-5.6 Sol").map(MiersIqModel::iq).average(), 0.0001)
+        assertEquals(59.44, grouped.getValue("GPT-6 Luna").map(MiersIqModel::iq).average(), 0.0001)
         assertEquals(listOf("ultra", "max", "xhigh", "high", "medium", "low"), grouped.getValue("GPT-6 Astra").map(MiersIqModel::strength))
         assertTrue(grouped.getValue("GPT-6 Astra").all { it.family == MiersModelFamily.ASTRA })
     }
@@ -69,7 +69,7 @@ class MiersIqImageRendererTest {
 
         val rankStart = 110 + (2 * 242) + 84
         assertEquals(0x58A6FF, image.getRGB(210, rankStart + 14) and 0x00FFFFFF)
-        assertEquals(0x58A6FF, image.getRGB(800, rankStart + 14) and 0x00FFFFFF)
+        assertEquals(0x6BCB8B, image.getRGB(800, rankStart + 14) and 0x00FFFFFF)
         assertTrue(hasPixels(image, 542, rankStart + 8, 585, rankStart + 27))
         assertTrue(hasPixels(image, 1132, rankStart + 8, 1178, rankStart + 27))
         assertTrue(image.getRGB(311, rankStart + 20) != image.getRGB(0, 0))
@@ -99,7 +99,7 @@ class MiersIqImageRendererTest {
         assertEquals(image.getRGB(1200, 120), image.getRGB(1150, 120))
         val rankStart = 110 + (2 * 242) + 84
         assertEquals(0x58A6FF, image.getRGB(210, rankStart + 14) and 0x00FFFFFF)
-        assertEquals(0x58A6FF, image.getRGB(800, rankStart + 14) and 0x00FFFFFF)
+        assertEquals(0x6BCB8B, image.getRGB(800, rankStart + 14) and 0x00FFFFFF)
     }
 
     @Test
@@ -158,6 +158,22 @@ class MiersIqImageRendererTest {
         assertTrue(hasNonBackgroundPixel(image))
     }
 
+    @Test
+    fun `rendering uses the full 150 point scale and 25 point axis ticks`() {
+        assertEquals(150.0, MiersIqImageRenderer.IQ_SCALE_MAX)
+        val image = ImageIO.read(
+            ByteArrayInputStream(
+                MiersIqImageRenderer(
+                    listOf(MiersIqModel("Model", 150.0, MiersModelFamily.SOL, "high")),
+                ).renderPng(),
+            ),
+        )
+        val axisY = 440
+        val expectedTickX = listOf(210, 263, 317, 370, 423, 477, 530)
+        val background = image.getRGB(0, 0)
+        assertEquals(expectedTickX, (210..530).filter { x -> image.getRGB(x, axisY) != background })
+    }
+
     private fun hasNonBackgroundPixel(image: BufferedImage): Boolean {
         val background = image.getRGB(0, 0)
         for (y in 0 until image.height step 8) {
@@ -175,34 +191,38 @@ class MiersIqImageRendererTest {
     }
 
     private fun testModels(): List<MiersIqModel> = listOf(
-        MiersIqModel("GPT5.6 Sol", 104.5, MiersModelFamily.SOL, "ultra"),
-        MiersIqModel("GPT5.6 Sol", 105.8, MiersModelFamily.SOL, "max"),
-        MiersIqModel("GPT5.6 Sol", 104.5, MiersModelFamily.SOL, "xhigh"),
-        MiersIqModel("GPT5.6 Sol", 81.7, MiersModelFamily.SOL, "high"),
-        MiersIqModel("GPT5.6 Sol", 88.4, MiersModelFamily.SOL, "medium"),
-        MiersIqModel("GPT5.6 Sol", 76.3, MiersModelFamily.SOL, "low"),
-        MiersIqModel("GPT5.6 Terra", 97.8, MiersModelFamily.TERRA, "ultra"),
-        MiersIqModel("GPT5.6 Terra", 95.1, MiersModelFamily.TERRA, "max"),
-        MiersIqModel("GPT5.6 Terra", 84.4, MiersModelFamily.TERRA, "xhigh"),
-        MiersIqModel("GPT5.6 Terra", 71.0, MiersModelFamily.TERRA, "high"),
-        MiersIqModel("GPT5.6 Terra", 61.6, MiersModelFamily.TERRA, "medium"),
-        MiersIqModel("GPT5.6 Terra", 44.2, MiersModelFamily.TERRA, "low"),
-        MiersIqModel("GPT5.6 Luna", 101.8, MiersModelFamily.LUNA, "max"),
-        MiersIqModel("GPT5.6 Luna", 89.7, MiersModelFamily.LUNA, "xhigh"),
-        MiersIqModel("GPT5.6 Luna", 65.6, MiersModelFamily.LUNA, "high"),
-        MiersIqModel("GPT5.6 Luna", 32.1, MiersModelFamily.LUNA, "medium"),
-        MiersIqModel("GPT5.6 Luna", 8.0, MiersModelFamily.LUNA, "low"),
         MiersIqModel("GPT-6 Astra", 7.0, MiersModelFamily.ASTRA, "ultra"),
         MiersIqModel("GPT-6 Astra", 6.0, MiersModelFamily.ASTRA, "max"),
         MiersIqModel("GPT-6 Astra", 5.0, MiersModelFamily.ASTRA, "xhigh"),
         MiersIqModel("GPT-6 Astra", 4.0, MiersModelFamily.ASTRA, "high"),
         MiersIqModel("GPT-6 Astra", 3.0, MiersModelFamily.ASTRA, "medium"),
         MiersIqModel("GPT-6 Astra", 1.0, MiersModelFamily.ASTRA, "low"),
-        MiersIqModel("GPT5.5", 100.4, MiersModelFamily.GPT55, "xhigh"),
-        MiersIqModel("GPT5.5", 84.4, MiersModelFamily.GPT55, "high"),
-        MiersIqModel("DeepSeek V4 Flash", 92.4, MiersModelFamily.DEEPSEEK, "max"),
-        MiersIqModel("DeepSeek V4 Flash", 73.7, MiersModelFamily.DEEPSEEK, "high"),
-        MiersIqModel("DeepSeek V4 Pro", 99.2, MiersModelFamily.DEEPSEEK, "max"),
-        MiersIqModel("DeepSeek V4 Pro", 90.8, MiersModelFamily.DEEPSEEK, "high"),
+        MiersIqModel("GPT-6.1 Sol", 97.8, MiersModelFamily.SOL, "ultra"),
+        MiersIqModel("GPT-6.1 Sol", 95.1, MiersModelFamily.SOL, "max"),
+        MiersIqModel("GPT-6.1 Sol", 84.4, MiersModelFamily.SOL, "xhigh"),
+        MiersIqModel("GPT-6.1 Sol", 71.0, MiersModelFamily.SOL, "high"),
+        MiersIqModel("GPT-6.1 Sol", 61.6, MiersModelFamily.SOL, "medium"),
+        MiersIqModel("GPT-6.1 Sol", 44.2, MiersModelFamily.SOL, "low"),
+        MiersIqModel("GPT-6 Sol", 100.4, MiersModelFamily.SOL, "ultra"),
+        MiersIqModel("GPT-6 Sol", 84.4, MiersModelFamily.SOL, "max"),
+        MiersIqModel("GPT-6 Sol", 80.0, MiersModelFamily.SOL, "xhigh"),
+        MiersIqModel("GPT-6 Sol", 65.0, MiersModelFamily.SOL, "high"),
+        MiersIqModel("GPT-6 Sol", 50.0, MiersModelFamily.SOL, "medium"),
+        MiersIqModel("GPT-6 Sol", 40.0, MiersModelFamily.SOL, "low"),
+        MiersIqModel("GPT-5.6 Sol", 104.5, MiersModelFamily.SOL, "ultra"),
+        MiersIqModel("GPT-5.6 Sol", 105.8, MiersModelFamily.SOL, "max"),
+        MiersIqModel("GPT-5.6 Sol", 104.5, MiersModelFamily.SOL, "xhigh"),
+        MiersIqModel("GPT-5.6 Sol", 81.7, MiersModelFamily.SOL, "high"),
+        MiersIqModel("GPT-5.6 Sol", 88.4, MiersModelFamily.SOL, "medium"),
+        MiersIqModel("GPT-5.6 Sol", 76.3, MiersModelFamily.SOL, "low"),
+        MiersIqModel("GPT-6 Luna", 101.8, MiersModelFamily.LUNA, "max"),
+        MiersIqModel("GPT-6 Luna", 89.7, MiersModelFamily.LUNA, "xhigh"),
+        MiersIqModel("GPT-6 Luna", 65.6, MiersModelFamily.LUNA, "high"),
+        MiersIqModel("GPT-6 Luna", 32.1, MiersModelFamily.LUNA, "medium"),
+        MiersIqModel("GPT-6 Luna", 8.0, MiersModelFamily.LUNA, "low"),
+        MiersIqModel("GPT-5.6 Luna", 92.4, MiersModelFamily.LUNA, "max"),
+        MiersIqModel("GPT-5.6 Luna", 73.7, MiersModelFamily.LUNA, "xhigh"),
+        MiersIqModel("GPT-5.6 Luna", 99.2, MiersModelFamily.LUNA, "medium"),
+        MiersIqModel("GPT-5.6 Luna", 90.8, MiersModelFamily.LUNA, "low"),
     )
 }

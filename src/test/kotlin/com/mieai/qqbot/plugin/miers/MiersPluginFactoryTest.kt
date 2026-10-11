@@ -213,13 +213,18 @@ class MiersPluginFactoryTest {
             plugin.start()
             try {
                 fixture.events.emit(event(fixture, "/miers", authorId = "user-1")).toCompletableFuture().join()
-                awaitCondition { fixture.http.requests().size == 1 && fixture.messages.textMessages().size == 1 }
+                awaitCondition { fixture.http.requests().size == 34 && fixture.messages.textMessages().size == 1 }
 
                 fixture.events.emit(event(fixture, "/miers", authorId = "user-2")).toCompletableFuture().join()
-                awaitCondition { fixture.http.requests().size == 2 && fixture.messages.textMessages().size == 2 }
+                awaitCondition { fixture.http.requests().size == 68 && fixture.messages.textMessages().size == 2 }
 
                 fixture.http.requests().forEach { request ->
-                    assertEquals(CodexRadarIqClient.ENDPOINT, request.uri.toString())
+                    assertEquals("api.codexradar.com", request.uri.host)
+                    assertEquals("/api/v1/radar-bench-score", request.uri.path)
+                    val selection = request.uri.rawQuery.orEmpty().split('&')
+                        .associate { part -> part.substringBefore('=') to part.substringAfter('=') }
+                    assertEquals(setOf("model", "effort", "view"), selection.keys)
+                    assertEquals("summary", selection["view"])
                 }
                 assertTrue(fixture.messages.textMessages().all { it.content.contains("抓取失败") })
                 assertTrue(fixture.media.uploads().isEmpty())
